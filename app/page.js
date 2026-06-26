@@ -111,6 +111,28 @@ const resultTabs = [
   { id: "report", label: "Bericht" }
 ];
 
+function scrollViewportToTop() {
+  if (typeof window === "undefined") return;
+
+  const run = () => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+
+    if (document.documentElement) {
+      document.documentElement.scrollTop = 0;
+    }
+
+    if (document.body) {
+      document.body.scrollTop = 0;
+    }
+  };
+
+  if (typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(run);
+  } else {
+    setTimeout(run, 0);
+  }
+}
+
 export default function Page() {
   const [form, setForm] = useState({ ...emptyForm });
   const [days, setDays] = useState(Array.from({ length: 7 }, () => ({ ...emptyDay })));
@@ -175,6 +197,12 @@ export default function Page() {
       })
     );
   }, [form, days, report, activeStep, stepCheckins, wizardStep, activeDay, showDetails, resultTab, aiNoticeAccepted, privacyNoticeAccepted, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+
+    scrollViewportToTop();
+  }, [wizardStep, activeDay, resultTab, activeStep, hydrated]);
 
   const consentReady = aiNoticeAccepted && privacyNoticeAccepted;
   const analysisDisabled = loading || !consentReady;
