@@ -10,6 +10,9 @@ const MUTED = "#cfc6b3";
 const STORAGE_KEY = "nordschmiede_ernaehrungsanalyse_state_v24_pdf_final";
 const KORPERKOMPASS_URL = "https://www.nordschmiede.com/korperkompass";
 const LOGO_URL = "/nordschmiede-rune.png";
+const PRIVACY_URL = "https://www.nordschmiede.com/datenschutz";
+const IMPRINT_URL = "https://www.nordschmiede.com/impressum";
+const CONSENT_VERSION = "ernaehrungsanalyse-v1-2026-06-21";
 
 const emptyDay = {
   breakfast: "",
@@ -121,24 +124,12 @@ export default function Page() {
   const [activeDay, setActiveDay] = useState(0);
   const [todayLabel, setTodayLabel] = useState("");
   const [showDetails, setShowDetails] = useState(false);
-  const [accessMode, setAccessMode] = useState("free");
   const [resultTab, setResultTab] = useState("overview");
+  const [aiNoticeAccepted, setAiNoticeAccepted] = useState(false);
+  const [privacyNoticeAccepted, setPrivacyNoticeAccepted] = useState(false);
 
   useEffect(() => {
     try {
-      const params = new URLSearchParams(window.location.search);
-      const access = params.get("access");
-      const host = window.location.hostname;
-
-      if (
-        host === "localhost" ||
-        access === "integration" ||
-        access === "admin" ||
-        access === "full"
-      ) {
-        setAccessMode("full");
-      }
-
       const saved = localStorage.getItem(STORAGE_KEY);
 
       if (saved) {
@@ -153,6 +144,8 @@ export default function Page() {
         if (typeof parsed.activeDay === "number") setActiveDay(parsed.activeDay);
         if (typeof parsed.showDetails === "boolean") setShowDetails(parsed.showDetails);
         if (typeof parsed.resultTab === "string") setResultTab(parsed.resultTab);
+        if (typeof parsed.aiNoticeAccepted === "boolean") setAiNoticeAccepted(parsed.aiNoticeAccepted);
+        if (typeof parsed.privacyNoticeAccepted === "boolean") setPrivacyNoticeAccepted(parsed.privacyNoticeAccepted);
       }
     } catch (error) {
       console.error("Speicher konnte nicht geladen werden:", error);
@@ -176,13 +169,15 @@ export default function Page() {
         wizardStep,
         activeDay,
         showDetails,
-        resultTab
+        resultTab,
+        aiNoticeAccepted,
+        privacyNoticeAccepted
       })
     );
-  }, [form, days, report, activeStep, stepCheckins, wizardStep, activeDay, showDetails, resultTab, hydrated]);
+  }, [form, days, report, activeStep, stepCheckins, wizardStep, activeDay, showDetails, resultTab, aiNoticeAccepted, privacyNoticeAccepted, hydrated]);
 
-  const isFullAccess = accessMode === "full";
-  const freeAnalysisLocked = Boolean(report) && !isFullAccess;
+  const consentReady = aiNoticeAccepted && privacyNoticeAccepted;
+  const analysisDisabled = loading || !consentReady;
 
   function normalizeDays(inputDays) {
     if (!Array.isArray(inputDays)) {
@@ -234,6 +229,12 @@ export default function Page() {
     setResultTab("overview");
   }
 
+  function getAnalysisButtonText(activeLabel = "Analyse starten") {
+    if (loading) return "Analyse läuft...";
+    if (!consentReady) return "Hinweise bestätigen";
+    return activeLabel;
+  }
+
   function resetApp() {
     const confirmReset = window.confirm(
       "Möchtest du alle Eingaben, Analyse-Ergebnisse und Check-ins wirklich löschen?"
@@ -252,6 +253,8 @@ export default function Page() {
     setActiveDay(0);
     setShowDetails(false);
     setResultTab("overview");
+    setAiNoticeAccepted(false);
+    setPrivacyNoticeAccepted(false);
   }
 
   function getTodayKey() {
@@ -317,35 +320,165 @@ export default function Page() {
 
   function cleanStepText(text) {
     if (!text) return "";
-    return text.replace(/^Schritt\s*\d+\s*[:.)-]\s*/i, "").trim();
+    return String(text).replace(/^Schritt\s*\d+\s*[:.)-]\s*/i, "").trim();
+  }
+
+  function extractLabeledPart(text, label) {
+    if (!text) return "";
+    const source = String(text);
+    const pattern = new RegExp(label + "\\s*:\\s*([\\s\\S]*?)(?=\\s+(?:Titel|Schrittziel|Ab jetzt|Umbau|Häufigkeit|Haeufigkeit|Wirkung pro Ereignis|Wirkung|Wochenwirkung|Tagesdurchschnitt|Schließt|Schliesst|Fokus|Art|Warum|Rest|Zielbezug|Bilanz|Interne Bilanz)\\s*:|$)", "i");
+    const match = source.match(pattern);
+    return match ? match[1].trim() : "";
+  }
+
+  function stripStructuredLabels(text) {
+    if (!text) return "";
+    return String(text)
+      .replace(/\b(Titel|Schrittziel|Ab jetzt|Umbau|Häufigkeit|Haeufigkeit|Wirkung pro Ereignis|Wirkung|Wochenwirkung|Tagesdurchschnitt|Schließt|Schliesst|Fokus|Art|Warum|Rest|Zielbezug|Bilanz|Interne Bilanz)\s*:/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   function extractEffect(text) {
     if (!text) return "Der Effekt entsteht über weniger unnötige Kalorien, bessere Struktur oder mehr Protein im Alltag.";
 
-    const kcalMatch = text.match(/(\d+)\s*[–-]\s*(\d+)\s*kcal/i);
+    const explicit = extractLabeledPart(text, "Wirkung");
+    if (explicit) return explicit;
+
+    const kcalMatch = String(text).match(/(\d+)\s*[–-]\s*(\d+)\s*kcal/i);
     if (kcalMatch) {
-      return "Erwarteter Effekt: ca. " + kcalMatch[1] + "–" + kcalMatch[2] + " kcal weniger im relevanten Zeitraum.";
+      return "ca. " + kcalMatch[1] + "–" + kcalMatch[2] + " kcal Veränderung im relevanten Zeitraum.";
     }
 
-    const singleKcalMatch = text.match(/(\d+)\s*kcal/i);
+    const singleKcalMatch = String(text).match(/([+-]?\d+)\s*kcal/i);
     if (singleKcalMatch) {
-      return "Erwarteter Effekt: ca. " + singleKcalMatch[1] + " kcal Veränderung im relevanten Zeitraum.";
+      return "ca. " + singleKcalMatch[1] + " kcal Veränderung im relevanten Zeitraum.";
     }
 
-    return "Erwarteter Effekt: weniger Reibung, klarere Mahlzeitenstruktur und bessere Steuerbarkeit im Alltag.";
+    return "weniger Reibung, klarere Mahlzeitenstruktur und bessere Steuerbarkeit im Alltag.";
+  }
+
+  function deriveStepTitle(action, cleaned) {
+    const text = [action, cleaned].filter(Boolean).join(" ").toLowerCase();
+
+    if (/cola|limonade|saft|eistee/.test(text)) return "Cola ersetzen";
+    if (/schokoriegel|schokolade/.test(text)) return "Süßes ersetzen";
+    if (/chips/.test(text)) return "Chips portionieren";
+    if (/nuss|nüsse|nuesse/.test(text)) return "Nüsse portionieren";
+    if (/döner|doener/.test(text)) return "Döner umbauen";
+    if (/pizza/.test(text)) return "Pizza leichter ersetzen";
+    if (/sahne|sahnesauce/.test(text)) return "Sahnesauce ersetzen";
+    if (/butter/.test(text)) return "Butter leichter ersetzen";
+    if (/käse|kaese/.test(text)) return "Käse bewusst dosieren";
+    if (/nutella|marmelade/.test(text)) return "Süßen Belag ersetzen";
+    if (/protein|magerquark|quark|skyr|hüttenkäse|huettenkäse|hähnchen|haehnchen|pute|thunfisch/.test(text)) return "Proteinbasis stärken";
+
+    const firstSentence = String(action || cleaned || "").split(/[.!?]/)[0].trim();
+    return firstSentence.length > 58 ? firstSentence.slice(0, 55).trim() + "…" : (firstSentence || "Nächsten Hebel umsetzen");
+  }
+
+
+  function cleanDisplayPart(value) {
+    return String(value || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .replace(/[.。]+$/g, "")
+      .trim();
+  }
+
+  function getReadableStep(rawText) {
+    const cleaned = cleanStepText(rawText);
+    const explicitTitle = extractLabeledPart(cleaned, "Titel") || extractLabeledPart(cleaned, "Schrittziel");
+    const abJetzt = extractLabeledPart(cleaned, "Ab jetzt");
+    const umbau = extractLabeledPart(cleaned, "Umbau");
+    const haeufigkeit = extractLabeledPart(cleaned, "Häufigkeit") || extractLabeledPart(cleaned, "Haeufigkeit");
+    const fokus = extractLabeledPart(cleaned, "Fokus") || extractLabeledPart(cleaned, "Schließt") || extractLabeledPart(cleaned, "Schliesst") || extractLabeledPart(cleaned, "Zielbezug");
+    const warum = extractLabeledPart(cleaned, "Warum");
+    const art = extractLabeledPart(cleaned, "Art");
+    const actionFallback = cleaned
+      .split(/\bHäufigkeit\s*:/i)[0]
+      .split(/\bWirkung pro Ereignis\s*:/i)[0]
+      .split(/\bTagesdurchschnitt\s*:/i)[0]
+      .split(/\bSchließt\s*:/i)[0]
+      .trim();
+    const action = abJetzt || umbau || stripStructuredLabels(actionFallback) || "Setze den nächsten kleinen Hebel aus deiner Analyse um.";
+
+    return {
+      title: cleanDisplayPart(explicitTitle || deriveStepTitle(action, cleaned)),
+      action: pdfCleanDisplayPart(action),
+      frequency: cleanDisplayPart(haeufigkeit || "bei jedem Auftreten dieses Musters"),
+      focus: cleanDisplayPart(fokus || "Kalorien, Protein oder Fett gezielt Richtung Soll führen"),
+      why: cleanDisplayPart(warum || (art ? "Art: " + art : "Dieser Schritt verändert ein wiederkehrendes Muster aus deiner Woche"))
+    };
   }
 
   function getStepStructure() {
     const raw = getCurrentStepText();
-    const cleaned = cleanStepText(raw);
+    return getReadableStep(raw);
+  }
 
-    return {
-      action: cleaned || "Starte mit dem kleinsten sinnvollen Hebel aus deiner Analyse.",
-      instead: "Setze diesen Schritt bewusst an den Tagen um, an denen dieses Muster in deiner 7-Tage-Ernährung sichtbar wurde.",
-      why: "Dieser Schritt wurde aus deiner Ernährungsrealität und deiner Ist-/Soll-Differenz abgeleitet.",
-      effect: extractEffect(cleaned)
-    };
+  function correctionDirection(value, unit, label) {
+    const number = Number(value) || 0;
+    if (number === 0) return { label, value: "im Zielbereich", tone: "neutral" };
+    if (number > 0) return { label, value: "ca. -" + Math.abs(number) + " " + unit, tone: "down" };
+    return { label, value: "ca. +" + Math.abs(number) + " " + unit, tone: "up" };
+  }
+
+  function createFahrplanTarget(reportData) {
+    const diff = reportData?.differenz || {};
+    return [
+      correctionDirection(diff.kcal, "kcal", "Kalorien"),
+      correctionDirection(diff.protein, "g", "Protein"),
+      correctionDirection(diff.fett, "g", "Fett"),
+      correctionDirection(diff.kohlenhydrate, "g", "Kohlenhydrate")
+    ];
+  }
+
+
+  function signedDisplay(value, unit) {
+    const number = Number(value) || 0;
+    if (number === 0) return "±0 " + unit;
+    return (number > 0 ? "+" : "-") + Math.abs(number) + " " + unit;
+  }
+
+  function createWeeklyTargetCards(reportData) {
+    const weekly = reportData?.fahrplanWochenziel?.wochenziel;
+    if (!weekly) return [];
+
+    return [
+      { label: "Kalorien/Woche", value: signedDisplay(weekly.kcal, "kcal") },
+      { label: "Protein/Woche", value: signedDisplay(weekly.protein, "g") },
+      { label: "Fett/Woche", value: signedDisplay(weekly.fett, "g") },
+      { label: "Kohlenhydrate/Woche", value: signedDisplay(weekly.kohlenhydrate, "g") }
+    ];
+  }
+
+  function createPlanBalanceCards(reportData) {
+    const effect = reportData?.fahrplanSolverStatus?.geplanteTageswirkung || reportData?.fahrplanWirkung?.geplanteTageswirkung;
+    if (!effect) return [];
+
+    return [
+      { label: "geplant kcal/Tag", value: signedDisplay(Math.round(effect.kcal || 0), "kcal") },
+      { label: "geplant Protein/Tag", value: signedDisplay(Math.round(effect.protein || 0), "g") },
+      { label: "geplant Fett/Tag", value: signedDisplay(Math.round(effect.fett || 0), "g") },
+      { label: "geplant KH/Tag", value: signedDisplay(Math.round(effect.kohlenhydrate || 0), "g") }
+    ];
+  }
+
+  function createPlanBalanceText(reportData) {
+    const status = reportData?.fahrplanSolverStatus;
+    if (!status) return "";
+    const real = Number(status.echteBilanzschritte) || 0;
+    const confirmations = Number(status.bestaetigungenProSchritt) || 3;
+    if (status.modus === "v38_kumulativer_30_tage_solver") {
+      return "Bilanzprüfung: Die App berechnet " + real + " kumulative Umbauten. Jeder Schritt wird " + confirmations + "x bestätigt, bleibt danach aktiv und nach Schritt 10 zählt die Summe aller Schritte.";
+    }
+    return "Bilanzprüfung: Die geplante Wirkung ist eine Näherung und sollte bei ungenauen Freitextmengen nach der ersten Woche überprüft werden.";
+  }
+
+  function createFahrplanIntro(reportData) {
+    if (reportData?.fahrplanBilanz) return reportData.fahrplanBilanz;
+    return "Dieser Fahrplan ist kein allgemeiner Ernährungsplan. Er ist ein kumulativer 30-Tage-Aufbau: Jeder Schritt wird 3x bestätigt, bleibt danach aktiv und nach Schritt 10 zählt die Summe aller Umbauten.";
   }
 
   function getStableBuildingBlocks() {
@@ -464,7 +597,9 @@ export default function Page() {
       item => item.step === activeStep && item.status === "done"
     ).length;
 
-    if (successfulDaysForCurrentStep >= 3 && activeStep < 9) {
+    const maxStepIndex = Math.max(0, (report?.zehnSchrittePlan?.length || 10) - 1);
+
+    if (successfulDaysForCurrentStep >= 3 && activeStep < maxStepIndex) {
       setActiveStep(prev => prev + 1);
     }
   }
@@ -484,9 +619,9 @@ export default function Page() {
   }
 
   async function runAnalysis() {
-    if (freeAnalysisLocked) {
-      setWizardStep(3);
-      setResultTab("overview");
+    if (!consentReady) {
+      setWizardStep(2);
+      setErrorText("Bitte bestätige zuerst die KI- und Datenschutzhinweise, bevor du die Analyse startest.");
       return;
     }
 
@@ -500,7 +635,16 @@ export default function Page() {
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ form, days })
+        body: JSON.stringify({
+          form,
+          days,
+          consent: {
+            aiAccepted: aiNoticeAccepted,
+            privacyAccepted: privacyNoticeAccepted,
+            version: CONSENT_VERSION,
+            acceptedAt: new Date().toISOString()
+          }
+        })
       });
 
       const data = await res.json();
@@ -543,6 +687,11 @@ export default function Page() {
   const currentDay = days[activeDay] || emptyDay;
   const stepStructure = getStepStructure();
   const stableBuildingBlocks = getStableBuildingBlocks();
+  const fahrplanTarget = report ? createFahrplanTarget(report) : [];
+  const fahrplanWeeklyTarget = report ? createWeeklyTargetCards(report) : [];
+  const fahrplanPlanBalance = report ? createPlanBalanceCards(report) : [];
+  const fahrplanBalanceText = report ? createPlanBalanceText(report) : "";
+  const fahrplanIntro = report ? createFahrplanIntro(report) : "";
 
   return (
     <main style={styles.page}>
@@ -771,6 +920,13 @@ export default function Page() {
             font-weight: 800 !important;
           }
 
+          .pdf-card-intro {
+            font-size: 8.2pt !important;
+            color: #4f4a3f !important;
+            line-height: 1.38 !important;
+            margin: 0 0 4mm !important;
+          }
+
           .pdf-summary-hero h2 {
             color: #f4efe4 !important;
             font-size: 20px !important;
@@ -783,6 +939,29 @@ export default function Page() {
             grid-template-columns: repeat(3, 1fr) !important;
             gap: 4mm !important;
             margin-bottom: 6mm !important;
+          }
+
+          .pdf-score-grid-small {
+            grid-template-columns: repeat(4, 1fr) !important;
+            margin-top: 4mm !important;
+            margin-bottom: 0 !important;
+            gap: 3mm !important;
+          }
+
+          .pdf-target-card .pdf-score-card {
+            padding: 4mm !important;
+          }
+
+          .pdf-target-card .pdf-score-card strong {
+            font-size: 12px !important;
+          }
+
+
+          .pdf-small-note {
+            margin: 4mm 0 0 0 !important;
+            color: #4c4b45 !important;
+            font-size: 10px !important;
+            line-height: 1.45 !important;
           }
 
           .pdf-score-card {
@@ -1007,6 +1186,27 @@ export default function Page() {
             margin: 0 !important;
           }
 
+          .pdf-roadmap-title {
+            display: block !important;
+            color: #102b1d !important;
+            font-size: 13px !important;
+            line-height: 1.2 !important;
+            margin-bottom: 1.5mm !important;
+          }
+
+          .pdf-roadmap-action {
+            color: #142016 !important;
+            margin-bottom: 2mm !important;
+          }
+
+          .pdf-roadmap-meta {
+            display: grid !important;
+            gap: 1mm !important;
+            color: #5c614d !important;
+            font-size: 9.5px !important;
+            line-height: 1.25 !important;
+          }
+
           .pdf-source-item {
             border-top: 1px solid #e0d2ab !important;
             padding-top: 3mm !important;
@@ -1152,37 +1352,19 @@ export default function Page() {
           <WizardProgress current={wizardStep} setCurrent={setWizardStep} report={report} />
 
           <div style={styles.actionRow}>
-            {(!report || isFullAccess) && (
-              <button style={styles.secondaryButton} onClick={fillExample}>
-                Beispiel ausfüllen
-              </button>
-            )}
+            <button style={styles.secondaryButton} onClick={fillExample}>
+              Beispiel ausfüllen
+            </button>
 
-            {(!report || isFullAccess) && (
-              <button style={styles.ghostButton} onClick={resetApp}>
-                Alles zurücksetzen
-              </button>
-            )}
-
-            {isFullAccess && (
-              <span style={styles.modeBadge}>Vollzugang aktiv</span>
-            )}
-
-            {!isFullAccess && (
-              <span style={styles.modeBadge}>Kostenlose Einmalanalyse</span>
-            )}
+            <button style={styles.ghostButton} onClick={resetApp}>
+              Alles zurücksetzen
+            </button>
           </div>
         </div>
 
         {report && (
           <div style={styles.saveNotice} className="no-print">
             Fortschritt gespeichert. Dein Stand wird auf diesem Gerät und in diesem Browser gespeichert. Wenn du Browserdaten löschst oder ein anderes Gerät nutzt, ist der Fortschritt dort nicht verfügbar.
-          </div>
-        )}
-
-        {freeAnalysisLocked && (
-          <div style={styles.infoNotice} className="no-print">
-            Diese kostenlose Analyse bildet deinen aktuellen Ist-Zustand ab. Eine neue Analyse ist im Nordschmiede Analyse-Modus oder in der Begleitung vorgesehen.
           </div>
         )}
 
@@ -1296,6 +1478,13 @@ export default function Page() {
               </p>
             </div>
 
+            <ConsentBox
+              aiNoticeAccepted={aiNoticeAccepted}
+              setAiNoticeAccepted={setAiNoticeAccepted}
+              privacyNoticeAccepted={privacyNoticeAccepted}
+              setPrivacyNoticeAccepted={setPrivacyNoticeAccepted}
+            />
+
             <div style={styles.topAnalyzeRow}>
               <div>
                 <strong style={styles.topAnalyzeTitle}>Bereit zur Auswertung?</strong>
@@ -1307,13 +1496,13 @@ export default function Page() {
               <button
                 style={{
                   ...styles.primaryButton,
-                  opacity: loading || freeAnalysisLocked ? 0.65 : 1,
-                  cursor: loading || freeAnalysisLocked ? "not-allowed" : "pointer"
+                  opacity: analysisDisabled ? 0.65 : 1,
+                  cursor: analysisDisabled ? "not-allowed" : "pointer"
                 }}
-                disabled={loading || freeAnalysisLocked}
+                disabled={analysisDisabled}
                 onClick={runAnalysis}
               >
-                {freeAnalysisLocked ? "Kostenlose Analyse bereits erstellt" : loading ? "Analyse läuft..." : "Analyse starten"}
+                {getAnalysisButtonText("Analyse starten")}
               </button>
             </div>
 
@@ -1414,13 +1603,13 @@ export default function Page() {
                 <button
                   style={{
                     ...styles.primaryButton,
-                    opacity: loading || freeAnalysisLocked ? 0.65 : 1,
-                    cursor: loading || freeAnalysisLocked ? "not-allowed" : "pointer"
+                    opacity: analysisDisabled ? 0.65 : 1,
+                    cursor: analysisDisabled ? "not-allowed" : "pointer"
                   }}
-                  disabled={loading || freeAnalysisLocked}
+                  disabled={analysisDisabled}
                   onClick={runAnalysis}
                 >
-                  {freeAnalysisLocked ? "Neue Analyse in Begleitung freischalten" : loading ? "Analyse läuft..." : "Analyse starten"}
+                  {getAnalysisButtonText("Analyse starten", "Neue Analyse in Begleitung freischalten")}
                 </button>
               )}
             </div>
@@ -1434,13 +1623,13 @@ export default function Page() {
               <button
                 style={{
                   ...styles.secondaryButton,
-                  opacity: loading || freeAnalysisLocked ? 0.65 : 1,
-                  cursor: loading || freeAnalysisLocked ? "not-allowed" : "pointer"
+                  opacity: analysisDisabled ? 0.65 : 1,
+                  cursor: analysisDisabled ? "not-allowed" : "pointer"
                 }}
-                disabled={loading || freeAnalysisLocked}
+                disabled={analysisDisabled}
                 onClick={runAnalysis}
               >
-                {freeAnalysisLocked ? "Kostenlose Analyse bereits erstellt" : loading ? "Analyse läuft..." : "Analyse jetzt starten"}
+                {getAnalysisButtonText("Analyse jetzt starten")}
               </button>
             </div>
           </section>
@@ -1532,30 +1721,63 @@ export default function Page() {
 
                 {resultTab === "implementation" && (
                   <>
+                    <div style={styles.correctionCard} className="print-section">
+                      <span style={styles.kicker}>Ziel dieses Fahrplans</span>
+                      <h2 style={styles.h2}>Die 10 Schritte bauen deinen Durchschnittstag um</h2>
+                      <p style={styles.bodyText}>{fahrplanIntro}</p>
+                      <div style={styles.correctionGrid}>
+                        {fahrplanTarget.map((item, index) => (
+                          <div key={index} style={styles.correctionItem}>
+                            <span>{item.label}</span>
+                            <strong>{item.value}</strong>
+                          </div>
+                        ))}
+                      </div>
+
+                      {fahrplanPlanBalance.length > 0 && (
+                        <>
+                          <p style={styles.smallText}><strong>Geplante Wirkung nach Schritt 10:</strong></p>
+                          <div style={styles.correctionGrid}>
+                            {fahrplanPlanBalance.map((item, index) => (
+                              <div key={index} style={styles.correctionItem}>
+                                <span>{item.label}</span>
+                                <strong>{item.value}</strong>
+                              </div>
+                            ))}
+                          </div>
+                          {fahrplanBalanceText && <p style={styles.smallText}>{fahrplanBalanceText}</p>}
+                        </>
+                      )}
+
+                      <p style={styles.smallText}>
+                        Die App rechnet die Wirkung aller 10 Schritte kumuliert. Jeder Schritt wird 3x bestätigt, bleibt danach aktiv und nach Schritt 10 zählt die Summe aller Umbauten.
+                      </p>
+                    </div>
+
                     <div style={styles.focusCard} className="print-section">
                       <span style={styles.kicker}>Dein aktueller Umsetzungsschritt</span>
                       <h2 style={styles.h2}>Schritt {activeStep + 1} von 10</h2>
 
                       <div style={styles.structuredStepGrid}>
                         <div style={styles.stepMainBox}>
-                          <strong style={styles.stepBoxTitle}>Was du jetzt konkret änderst</strong>
+                          <span style={styles.stepBoxTitle}>Jetzt umsetzen</span>
+                          <strong style={styles.currentStepTitle}>{stepStructure.title}</strong>
                           <p style={styles.focusText}>{stepStructure.action}</p>
                         </div>
 
-                        <div style={styles.smallInfoBox}>
-                          <strong>Wo ansetzen?</strong>
-                          <p style={styles.smallText}>{stepStructure.instead}</p>
+                        <div style={styles.stepMetaGrid}>
+                          <div style={styles.smallInfoBox}>
+                            <strong>Häufigkeit</strong>
+                            <p style={styles.smallText}>{stepStructure.frequency}</p>
+                          </div>
+
+                          <div style={styles.smallInfoBox}>
+                            <strong>Fokus</strong>
+                            <p style={styles.smallText}>{stepStructure.focus}</p>
+                          </div>
                         </div>
 
-                        <div style={styles.smallInfoBox}>
-                          <strong>Warum dieser Schritt?</strong>
-                          <p style={styles.smallText}>{stepStructure.why}</p>
-                        </div>
-
-                        <div style={styles.smallInfoBox}>
-                          <strong>Erwarteter Effekt</strong>
-                          <p style={styles.smallText}>{stepStructure.effect}</p>
-                        </div>
+                        <p style={styles.stepWhyText}>{stepStructure.why}</p>
                       </div>
 
                       <div style={styles.progressBox} className="no-print">
@@ -1569,7 +1791,7 @@ export default function Page() {
                       </div>
 
                       <div style={styles.checkHint} className="no-print">
-                        Starte diesen Schritt im Alltag. Der nächste Schritt wird nach 3 erfolgreichen Umsetzungstagen freigeschaltet.
+                        Setze diesen Schritt 3x erfolgreich um. Danach wird der nächste Schritt freigeschaltet; alle bisherigen Schritte bleiben aktiv.
                       </div>
 
                       <div style={styles.checkRow} className="no-print">
@@ -1651,10 +1873,15 @@ export default function Page() {
                     <div style={styles.twoColumn} className="two-column-grid">
                       <div style={styles.card} className="print-section">
                         <span style={styles.kicker}>Muster</span>
-                        <h2 style={styles.h2}>Top-Ernährungsmuster</h2>
+                        <h2 style={styles.h2}>Dein größtes Potenzial</h2>
+                        <p style={styles.bodyText}>
+                          Diese Punkte zeigen, wo in deinen 7 Tagen aktuell der größte Hebel liegt.
+                          Sie sind nicht verboten – aber hier kannst du mit kleinen Anpassungen am meisten bewegen.
+                        </p>
                         {(report.topKalorienQuellen || []).slice(0, 5).map((item, index) => (
                           <div key={index} style={styles.driverRow}>
                             <strong>{index + 1}. {item.lebensmittel}</strong>
+                            {item.rolle && <span style={styles.rolePill}>{item.rolle}</span>}
                             <span>{item.kcal} kcal · {item.anteil}</span>
                             <p style={styles.smallText}>{item.grund}</p>
                           </div>
@@ -1663,7 +1890,11 @@ export default function Page() {
 
                       <div style={styles.card} className="print-section">
                         <span style={styles.kicker}>Grundlage</span>
-                        <h2 style={styles.h2}>Stabile Bausteine</h2>
+                        <h2 style={styles.h2}>Deine stabile Grundlage</h2>
+                        <p style={styles.bodyText}>
+                          Diese Lebensmittel und Gewohnheiten kannst du als Fundament nutzen.
+                          Sie geben deiner Ernährung Struktur, Protein, Flüssigkeit oder Sättigung – je nach Menge und Kontext.
+                        </p>
 
                         {stableBuildingBlocks.length > 0 ? (
                           stableBuildingBlocks.map((item, index) => (
@@ -1674,7 +1905,7 @@ export default function Page() {
                           ))
                         ) : (
                           <p style={styles.bodyText}>
-                            In deinen 7 Tagen sind noch wenige stabile Ernährungsbausteine sichtbar.
+                            In deinen 7 Tagen sind noch wenige stabile Grundlagen sichtbar.
                             Der erste Fokus liegt daher nicht auf Feintuning, sondern auf einfachen Grundlagen:
                             Flüssigkalorien reduzieren, Proteinquellen aufbauen und Mahlzeiten strukturieren.
                           </p>
@@ -1715,7 +1946,7 @@ export default function Page() {
                       <span style={styles.kicker}>Bericht</span>
                       <h2 style={styles.h2}>Dein Analysebericht</h2>
                       <p style={styles.bodyText}>
-                        Dieser Bericht fasst deine aktuelle Ernährungsrealität zusammen. Der komplette 10-Schritte-Fahrplan ist sichtbar, aber die App führt dich bewusst Schritt für Schritt durch die Umsetzung.
+                        Dieser Bericht fasst deine aktuelle Ernährungsrealität zusammen. Der komplette 10-Schritte-Fahrplan ist sichtbar, aber die App führt dich bewusst als 30-Tage-Aufbau Schritt für Schritt durch die Umsetzung.
                       </p>
 
                       <div style={styles.navigationRow} className="no-print">
@@ -1771,29 +2002,78 @@ export default function Page() {
                       </div>
                     )}
 
+                    <div style={styles.correctionCard} className="print-section">
+                      <span style={styles.kicker}>Ziel dieses Fahrplans</span>
+                      <h2 style={styles.h2}>Ist-Soll-Differenz schließen</h2>
+                      <p style={styles.bodyText}>{fahrplanIntro}</p>
+                      <div style={styles.correctionGrid}>
+                        {fahrplanTarget.map((item, index) => (
+                          <div key={index} style={styles.correctionItem}>
+                            <span>{item.label}</span>
+                            <strong>{item.value}</strong>
+                          </div>
+                        ))}
+                      </div>
+
+                      {fahrplanPlanBalance.length > 0 && (
+                        <>
+                          <p style={styles.smallText}><strong>Geplante Wirkung nach Schritt 10:</strong></p>
+                          <div style={styles.correctionGrid}>
+                            {fahrplanPlanBalance.map((item, index) => (
+                              <div key={index} style={styles.correctionItem}>
+                                <span>{item.label}</span>
+                                <strong>{item.value}</strong>
+                              </div>
+                            ))}
+                          </div>
+                          {fahrplanBalanceText && <p style={styles.smallText}>{fahrplanBalanceText}</p>}
+                        </>
+                      )}
+
+                      <p style={styles.smallText}>
+                        Die App rechnet die Wirkung aller 10 Schritte kumuliert. Jeder Schritt wird 3x bestätigt, bleibt danach aktiv und nach Schritt 10 zählt die Summe aller Umbauten.
+                      </p>
+                    </div>
+
                     <div style={styles.card} className="print-section pdf-page-break">
                       <h2 style={styles.h2}>Dein 10-Schritte-Fahrplan</h2>
                       <p style={styles.bodyText}>
-                        Starte nicht mit allen Schritten gleichzeitig. Dieser Fahrplan zeigt dir die Reihenfolge.
-                        Die Umsetzung erfolgt bewusst Schritt für Schritt.
+                        Starte nicht mit allen Schritten gleichzeitig. Jeder Schritt wird 3x bestätigt, bleibt danach aktiv und der nächste Schritt kommt dazu. Nach Schritt 10 soll die Summe aller Umbauten deinen durchschnittlichen Tag in Richtung Sollzustand bringen.
                       </p>
 
                       <div style={styles.stepPlanList}>
-                        {report.zehnSchrittePlan?.map((item, index) => (
-                          <div key={index} style={styles.stepPlanItem}>
-                            <strong>Schritt {index + 1}</strong>
-                            <p style={styles.smallText}>{cleanStepText(item)}</p>
-                          </div>
-                        ))}
+                        {report.zehnSchrittePlan?.map((item, index) => {
+                          const readable = getReadableStep(item);
+                          return (
+                            <div key={index} style={styles.stepPlanItem}>
+                              <div style={styles.stepPlanHeader}>
+                                <span style={styles.stepNumberBadge}>Schritt {index + 1}</span>
+                                <strong style={styles.stepPlanTitle}>{readable.title}</strong>
+                              </div>
+
+                              <p style={styles.stepActionText}>{readable.action}</p>
+
+                              <div style={styles.stepMiniMeta}>
+                                <span>Häufigkeit: {readable.frequency}</span>
+                                <span>Fokus: {readable.focus}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
 
                     <div style={styles.twoColumn} className="two-column-grid">
                       <div style={styles.card} className="print-section">
-                        <h2 style={styles.h2}>Top-Ernährungsmuster</h2>
+                        <h2 style={styles.h2}>Dein größtes Potenzial</h2>
+                        <p style={styles.bodyText}>
+                          Diese Punkte zeigen, wo in deinen 7 Tagen aktuell der größte Hebel liegt.
+                          Sie sind nicht verboten – aber hier kannst du mit kleinen Anpassungen am meisten bewegen.
+                        </p>
                         {(report.topKalorienQuellen || []).slice(0, 5).map((item, index) => (
                           <div key={index} style={styles.driverRow}>
                             <strong>{index + 1}. {item.lebensmittel}</strong>
+                            {item.rolle && <span style={styles.rolePill}>{item.rolle}</span>}
                             <span>{item.kcal} kcal · {item.anteil}</span>
                             <p style={styles.smallText}>{item.grund}</p>
                           </div>
@@ -1801,7 +2081,11 @@ export default function Page() {
                       </div>
 
                       <div style={styles.card} className="print-section">
-                        <h2 style={styles.h2}>Stabile Bausteine</h2>
+                        <h2 style={styles.h2}>Deine stabile Grundlage</h2>
+                        <p style={styles.bodyText}>
+                          Diese Lebensmittel und Gewohnheiten kannst du als Fundament nutzen.
+                          Sie geben deiner Ernährung Struktur, Protein, Flüssigkeit oder Sättigung – je nach Menge und Kontext.
+                        </p>
 
                         {stableBuildingBlocks.length > 0 ? (
                           stableBuildingBlocks.map((item, index) => (
@@ -1812,7 +2096,7 @@ export default function Page() {
                           ))
                         ) : (
                           <p style={styles.bodyText}>
-                            In deinen 7 Tagen sind noch wenige stabile Ernährungsbausteine sichtbar.
+                            In deinen 7 Tagen sind noch wenige stabile Grundlagen sichtbar.
                             Der erste Fokus liegt daher nicht auf Feintuning, sondern auf einfachen Grundlagen:
                             Flüssigkalorien reduzieren, Proteinquellen aufbauen und Mahlzeiten strukturieren.
                           </p>
@@ -1899,11 +2183,9 @@ export default function Page() {
                     </div>
 
                     <div style={styles.navigationRow} className="no-print">
-                      {isFullAccess && (
-                        <button style={styles.ghostButton} onClick={() => setWizardStep(2)}>
-                          Ernährung bearbeiten
-                        </button>
-                      )}
+                      <button style={styles.ghostButton} onClick={() => setWizardStep(2)}>
+                        Ernährung bearbeiten
+                      </button>
 
                       <button style={styles.primaryButton} onClick={printAnalysis}>
                         Analyse als PDF speichern
@@ -1915,6 +2197,8 @@ export default function Page() {
             )}
           </section>
         )}
+
+        <LegalFooter />
       </div>
     </main>
   );
@@ -1993,6 +2277,93 @@ function Textarea({ label, helper, value, onChange }) {
   );
 }
 
+function ConsentBox({
+  aiNoticeAccepted,
+  setAiNoticeAccepted,
+  privacyNoticeAccepted,
+  setPrivacyNoticeAccepted
+}) {
+  return (
+    <div style={styles.consentCard} className="no-print">
+      <div style={styles.consentHeaderRow}>
+        <div>
+          <span style={styles.kicker}>Hinweis vor der Analyse</span>
+          <h3 style={styles.consentTitle}>KI-gestützte Orientierung und Datenschutz</h3>
+        </div>
+      </div>
+
+      <p style={styles.consentIntro}>
+        Die Zielwerte für Kalorien und Makronährstoffe werden nach einer hinterlegten Formel berechnet.
+        Die Auswertung deiner Ernährungsmuster und die Formulierung der Handlungsschritte erfolgen KI-gestützt.
+        Die Analyse dient der strukturierten Orientierung und ersetzt keine ärztliche, ernährungsmedizinische
+        oder therapeutische Beratung.
+      </p>
+
+      <div style={styles.consentGrid}>
+        <div style={styles.consentPoint}>
+          <strong>Was verarbeitet wird</strong>
+          <p>
+            Körperdaten, Ziel, Aktivitätsniveau, Ernährungsform und deine 7-Tage-Ernährungsangaben
+            werden zur Erstellung des Reports verarbeitet.
+          </p>
+        </div>
+
+        <div style={styles.consentPoint}>
+          <strong>Was nicht eingegeben werden sollte</strong>
+          <p>
+            Bitte gib keine Diagnosen, Laborwerte, Medikamente oder besonders sensiblen Gesundheitsinformationen ein,
+            die für diese Analyse nicht notwendig sind.
+          </p>
+        </div>
+      </div>
+
+      <label style={styles.checkboxRow}>
+        <input
+          type="checkbox"
+          checked={aiNoticeAccepted}
+          onChange={event => setAiNoticeAccepted(event.target.checked)}
+          style={styles.checkboxBox}
+        />
+        <span style={styles.checkboxText}>
+          Ich habe verstanden, dass diese Analyse KI-gestützt erstellt wird und nur eine strukturierte Orientierung ist.
+          Sie ersetzt keine ärztliche, ernährungsmedizinische oder therapeutische Beratung.
+        </span>
+      </label>
+
+      <label style={styles.checkboxRow}>
+        <input
+          type="checkbox"
+          checked={privacyNoticeAccepted}
+          onChange={event => setPrivacyNoticeAccepted(event.target.checked)}
+          style={styles.checkboxBox}
+        />
+        <span style={styles.checkboxText}>
+          Ich bin einverstanden, dass meine Angaben zur Erstellung der Analyse verarbeitet und an die eingesetzten
+          technischen Dienstleister übermittelt werden. Die <a href={PRIVACY_URL} target="_blank" rel="noreferrer" style={styles.legalLink}>Datenschutzhinweise</a> habe ich gelesen.
+        </span>
+      </label>
+    </div>
+  );
+}
+
+function LegalFooter() {
+  return (
+    <footer style={styles.legalFooter} className="no-print">
+      <div style={styles.footerDivider} />
+      <p>
+        Nordschmiede Ernährungsanalyse · KI-gestützte Orientierung · keine Diagnose · keine medizinische Beratung.
+      </p>
+      <div style={styles.legalFooterLinks}>
+        <a href={PRIVACY_URL} target="_blank" rel="noreferrer" style={styles.legalLink}>Datenschutz</a>
+        <span>·</span>
+        <a href={IMPRINT_URL} target="_blank" rel="noreferrer" style={styles.legalLink}>Impressum</a>
+        <span>·</span>
+        <a href="mailto:kontakt@nordschmiede.com" style={styles.legalLink}>Kontakt</a>
+      </div>
+    </footer>
+  );
+}
+
 function MetricCard({ title, data }) {
   return (
     <div style={styles.card} className="print-section">
@@ -2006,6 +2377,20 @@ function MetricCard({ title, data }) {
       )}
     </div>
   );
+}
+
+
+function pdfCorrectionTarget(value, unit, label) {
+  const number = Number(value) || 0;
+  if (number === 0) return { label, value: "im Zielbereich" };
+  if (number > 0) return { label, value: "ca. -" + Math.abs(number) + " " + unit };
+  return { label, value: "ca. +" + Math.abs(number) + " " + unit };
+}
+
+function pdfSignedDisplay(value, unit) {
+  const number = Number(value) || 0;
+  if (number === 0) return "±0 " + unit;
+  return (number > 0 ? "+" : "-") + Math.abs(number) + " " + unit;
 }
 
 function PdfReport({
@@ -2024,6 +2409,14 @@ function PdfReport({
   const stepsTwo = steps.slice(5, 10);
   const topSources = Array.isArray(report.topKalorienQuellen) ? report.topKalorienQuellen.slice(0, 5) : [];
   const patterns = Array.isArray(report.problemMuster) ? report.problemMuster.slice(0, 4) : [];
+  const fahrplanTarget = [
+    pdfCorrectionTarget(report.differenz?.kcal, "kcal", "Kalorien"),
+    pdfCorrectionTarget(report.differenz?.protein, "g", "Protein"),
+    pdfCorrectionTarget(report.differenz?.fett, "g", "Fett"),
+    pdfCorrectionTarget(report.differenz?.kohlenhydrate, "g", "Kohlenhydrate")
+  ];
+  const fahrplanBilanz = report.fahrplanBilanz || "Die 10 Schritte sind als Umbau deiner bisherigen Ernährung gedacht: Sie sollen die gemessene Differenz zwischen Ist- und Soll-Zustand schrittweise schließen.";
+  const weeklyGoal = report.fahrplanWochenziel?.wochenziel || null;
 
   return (
     <div className="pdf-report">
@@ -2141,6 +2534,22 @@ function PdfReport({
           </div>
         </div>
 
+        <div className="pdf-card pdf-card-wide pdf-target-card">
+          <span>Ziel dieses Fahrplans</span>
+          <p>{fahrplanBilanz}</p>
+          <div className="pdf-score-grid pdf-score-grid-small">
+            {fahrplanTarget.map((item, index) => (
+              <PdfScore key={index} label={item.label} value={item.value} />
+            ))}
+          </div>
+
+          {weeklyGoal && (
+            <p className="pdf-small-note">
+              Wochenziel: {pdfSignedDisplay(weeklyGoal.kcal, "kcal")}, {pdfSignedDisplay(weeklyGoal.protein, "g Protein")}, {pdfSignedDisplay(weeklyGoal.fett, "g Fett")}, {pdfSignedDisplay(weeklyGoal.kohlenhydrate, "g Kohlenhydrate")}.
+            </p>
+          )}
+        </div>
+
         <div className="pdf-card pdf-card-wide">
           <span>Nächste konkrete Änderung</span>
           <p>{report.naechsteKonkreteAenderung}</p>
@@ -2159,26 +2568,28 @@ function PdfReport({
       </section>
 
       <section className="pdf-page pdf-page-light">
-        <PdfHeader eyebrow="03" title="Fahrplan · Schritte 1–5" />
+        <PdfHeader eyebrow="03" title="Differenz schließen · Schritte 1–5" />
         <RoadmapList steps={stepsOne} offset={0} cleanStepText={cleanStepText} />
         <PdfFooter page="03" />
       </section>
 
       <section className="pdf-page pdf-page-light">
-        <PdfHeader eyebrow="04" title="Fahrplan · Schritte 6–10" />
+        <PdfHeader eyebrow="04" title="Differenz schließen · Schritte 6–10" />
         <RoadmapList steps={stepsTwo} offset={5} cleanStepText={cleanStepText} />
         <PdfFooter page="04" />
       </section>
 
       <section className="pdf-page pdf-page-light">
-        <PdfHeader eyebrow="05" title="Muster & stabile Bausteine" />
+        <PdfHeader eyebrow="05" title="Potenzial & stabile Grundlage" />
 
         <div className="pdf-two-column">
           <div className="pdf-card pdf-card-tall">
-            <span>Top-Ernährungsmuster</span>
+            <span>Dein größtes Potenzial</span>
+            <p className="pdf-card-intro">Hier liegt in deinen 7 Tagen aktuell der größte Hebel. Nicht verboten – aber relevant.</p>
             {topSources.map((item, index) => (
               <div className="pdf-source-item" key={index}>
                 <strong>{index + 1}. {item.lebensmittel}</strong>
+                {item.rolle ? <p><em>{item.rolle}</em></p> : null}
                 <p>{item.kcal} kcal · {item.anteil}</p>
                 <p>{item.grund}</p>
               </div>
@@ -2186,7 +2597,8 @@ function PdfReport({
           </div>
 
           <div className="pdf-card pdf-card-tall">
-            <span>Stabile Bausteine</span>
+            <span>Deine stabile Grundlage</span>
+            <p className="pdf-card-intro">Darauf kannst du aufbauen: Struktur, Protein, Flüssigkeit oder Sättigung.</p>
             {stableBuildingBlocks.length > 0 ? (
               stableBuildingBlocks.map((item, index) => (
                 <div className="pdf-source-item pdf-source-positive" key={index}>
@@ -2196,7 +2608,7 @@ function PdfReport({
               ))
             ) : (
               <p>
-                In deinen 7 Tagen sind noch wenige stabile Ernährungsbausteine sichtbar.
+                In deinen 7 Tagen sind noch wenige stabile Grundlagen sichtbar.
                 Der erste Fokus liegt daher auf einfachen Grundlagen: Flüssigkalorien reduzieren,
                 Proteinquellen aufbauen und Mahlzeiten strukturieren.
               </p>
@@ -2278,15 +2690,84 @@ function PdfScore({ label, value }) {
   );
 }
 
+function pdfCleanStepText(text) {
+  if (!text) return "";
+  return String(text).replace(/^Schritt\s*\d+\s*[:.)-]\s*/i, "").trim();
+}
+
+function pdfExtractLabeledPart(text, label) {
+  if (!text) return "";
+  const pattern = new RegExp(label + "\\s*:\\s*([\\s\\S]*?)(?=\\s+(?:Titel|Schrittziel|Ab jetzt|Umbau|Häufigkeit|Haeufigkeit|Fokus|Wirkung pro Ereignis|Wirkung|Wochenwirkung|Tagesdurchschnitt|Schließt|Schliesst|Art|Warum|Rest|Zielbezug|Bilanz|Interne Bilanz)\\s*:|$)", "i");
+  const match = String(text).match(pattern);
+  return match ? match[1].trim() : "";
+}
+
+function pdfStripLabels(text) {
+  return String(text || "")
+    .replace(/\b(Titel|Schrittziel|Ab jetzt|Umbau|Häufigkeit|Haeufigkeit|Fokus|Wirkung pro Ereignis|Wirkung|Wochenwirkung|Tagesdurchschnitt|Schließt|Schliesst|Art|Warum|Rest|Zielbezug|Bilanz|Interne Bilanz)\s*:/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function pdfDeriveStepTitle(action, cleaned) {
+  const text = [action, cleaned].filter(Boolean).join(" ").toLowerCase();
+  if (/cola|limonade|saft|eistee/.test(text)) return "Cola ersetzen";
+  if (/schokoriegel|schokolade/.test(text)) return "Süßes ersetzen";
+  if (/chips/.test(text)) return "Chips portionieren";
+  if (/nuss|nüsse|nuesse/.test(text)) return "Nüsse portionieren";
+  if (/döner|doener/.test(text)) return "Döner umbauen";
+  if (/pizza/.test(text)) return "Pizza leichter ersetzen";
+  if (/sahne|sahnesauce/.test(text)) return "Sahnesauce ersetzen";
+  if (/butter/.test(text)) return "Butter leichter ersetzen";
+  if (/käse|kaese/.test(text)) return "Käse bewusst dosieren";
+  if (/nutella|marmelade/.test(text)) return "Süßen Belag ersetzen";
+  if (/protein|magerquark|quark|skyr|hüttenkäse|haehnchen|hähnchen|pute|thunfisch/.test(text)) return "Proteinbasis stärken";
+  const firstSentence = String(action || cleaned || "").split(/[.!?]/)[0].trim();
+  return firstSentence.length > 52 ? firstSentence.slice(0, 49).trim() + "…" : (firstSentence || "Nächsten Hebel umsetzen");
+}
+
+
+function pdfCleanDisplayPart(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[.。]+$/g, "")
+    .trim();
+}
+
+function pdfReadableStep(item) {
+  const cleaned = pdfCleanStepText(item);
+  const title = pdfExtractLabeledPart(cleaned, "Titel") || pdfExtractLabeledPart(cleaned, "Schrittziel");
+  const action = pdfExtractLabeledPart(cleaned, "Ab jetzt") || pdfExtractLabeledPart(cleaned, "Umbau") || pdfStripLabels(cleaned.split(/\bHäufigkeit\s*:/i)[0]);
+  const frequency = pdfExtractLabeledPart(cleaned, "Häufigkeit") || pdfExtractLabeledPart(cleaned, "Haeufigkeit") || "bei Auftreten";
+  const focus = pdfExtractLabeledPart(cleaned, "Fokus") || pdfExtractLabeledPart(cleaned, "Schließt") || pdfExtractLabeledPart(cleaned, "Schliesst") || "Zielbereich";
+  return {
+    title: pdfCleanDisplayPart(title || pdfDeriveStepTitle(action, cleaned)),
+    action: pdfCleanDisplayPart(action),
+    frequency: pdfCleanDisplayPart(frequency),
+    focus: pdfCleanDisplayPart(focus)
+  };
+}
+
 function RoadmapList({ steps, offset, cleanStepText }) {
   return (
     <div className="pdf-roadmap-list">
-      {steps.map((item, index) => (
-        <div className="pdf-roadmap-row" key={index}>
-          <div className="pdf-roadmap-index">{offset + index + 1}</div>
-          <p>{cleanStepText(item)}</p>
-        </div>
-      ))}
+      {steps.map((item, index) => {
+        const readable = pdfReadableStep(item);
+        return (
+          <div className="pdf-roadmap-row" key={index}>
+            <div className="pdf-roadmap-index">{offset + index + 1}</div>
+            <div>
+              <strong className="pdf-roadmap-title">{readable.title}</strong>
+              <p className="pdf-roadmap-action">{readable.action}</p>
+              <div className="pdf-roadmap-meta">
+                <span>Häufigkeit: {readable.frequency}</span>
+                <span>Fokus: {readable.focus}</span>
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -2696,9 +3177,17 @@ const styles = {
   },
   focusText: {
     color: TEXT,
-    lineHeight: 1.65,
-    fontSize: 22,
-    maxWidth: 960
+    lineHeight: 1.55,
+    fontSize: 21,
+    maxWidth: 960,
+    margin: "10px 0 0 0"
+  },
+  currentStepTitle: {
+    display: "block",
+    color: TEXT,
+    fontSize: 34,
+    lineHeight: 1.12,
+    marginBottom: 10
   },
   structuredStepGrid: {
     display: "grid",
@@ -2716,7 +3205,21 @@ const styles = {
   stepBoxTitle: {
     display: "block",
     color: GOLD,
-    marginBottom: 8
+    marginBottom: 8,
+    textTransform: "uppercase",
+    letterSpacing: "0.16em",
+    fontSize: 12
+  },
+  stepMetaGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: 12
+  },
+  stepWhyText: {
+    color: MUTED,
+    lineHeight: 1.6,
+    fontSize: 14,
+    margin: "0"
   },
   smallInfoBox: {
     background: "rgba(7,23,15,0.55)",
@@ -2765,6 +3268,36 @@ const styles = {
     cursor: "pointer",
     fontWeight: 700
   },
+  correctionCard: {
+    background: "linear-gradient(135deg, rgba(200,169,106,0.14), rgba(7,23,15,0.68))",
+    border: "1px solid rgba(200,169,106,0.34)",
+    borderRadius: 24,
+    padding: 26,
+    marginBottom: 24,
+    boxShadow: "0 22px 60px rgba(0,0,0,0.22)"
+  },
+  correctionGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+    gap: 12,
+    marginTop: 18
+  },
+  correctionItem: {
+    background: "rgba(7,23,15,0.58)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 16,
+    padding: 15,
+    display: "grid",
+    gap: 6
+  },
+  correctionItemMuted: {
+    background: "rgba(244,239,228,0.06)",
+    border: "1px solid rgba(200,169,106,0.16)",
+    borderRadius: 16,
+    padding: 15,
+    display: "grid",
+    gap: 6
+  },
   softCtaCard: {
     background: "rgba(200,169,106,0.10)",
     border: "1px solid rgba(200,169,106,0.30)",
@@ -2808,6 +3341,112 @@ const styles = {
     margin: "6px 0 0 0",
     fontSize: 14
   },
+  rolePill: {
+    display: "inline-flex",
+    width: "fit-content",
+    alignItems: "center",
+    margin: "8px 0 2px",
+    padding: "4px 9px",
+    borderRadius: 999,
+    border: "1px solid rgba(200, 169, 106, 0.45)",
+    background: "rgba(200, 169, 106, 0.10)",
+    color: GOLD,
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: 0.5
+  },
+  consentCard: {
+    background: "rgba(200,169,106,0.10)",
+    border: "1px solid rgba(200,169,106,0.32)",
+    borderRadius: 22,
+    padding: 22,
+    marginTop: 20,
+    marginBottom: 20,
+    boxShadow: "0 18px 50px rgba(0,0,0,0.18)"
+  },
+  consentHeaderRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 16,
+    alignItems: "flex-start",
+    marginBottom: 10
+  },
+  consentTitle: {
+    color: TEXT,
+    fontSize: 20,
+    margin: "8px 0 0 0"
+  },
+  consentIntro: {
+    color: MUTED,
+    lineHeight: 1.65,
+    fontSize: 15,
+    margin: "8px 0 16px 0"
+  },
+  consentGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+    gap: 12,
+    marginBottom: 16
+  },
+  consentPoint: {
+    background: "rgba(7,23,15,0.48)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 16,
+    padding: 14,
+    color: MUTED,
+    lineHeight: 1.5,
+    fontSize: 13
+  },
+  checkboxRow: {
+    display: "grid",
+    gridTemplateColumns: "24px 1fr",
+    gap: 12,
+    alignItems: "start",
+    background: "rgba(7,23,15,0.52)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 16,
+    padding: 14,
+    marginTop: 10,
+    cursor: "pointer"
+  },
+  checkboxBox: {
+    width: 18,
+    height: 18,
+    marginTop: 2,
+    accentColor: GOLD,
+    cursor: "pointer"
+  },
+  checkboxText: {
+    color: MUTED,
+    fontSize: 14,
+    lineHeight: 1.55
+  },
+  legalLink: {
+    color: GOLD,
+    textDecoration: "none",
+    fontWeight: 700
+  },
+  legalFooter: {
+    color: "#9f9686",
+    fontSize: 13,
+    lineHeight: 1.6,
+    marginTop: 34,
+    paddingBottom: 8,
+    textAlign: "center"
+  },
+  legalFooterLinks: {
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+    marginTop: 6
+  },
+  footerDivider: {
+    height: 1,
+    background: "rgba(200,169,106,0.22)",
+    marginBottom: 16
+  },
   reportHeader: {
     background: "rgba(16, 43, 29, 0.82)",
     border: "1px solid rgba(200,169,106,0.22)",
@@ -2823,8 +3462,42 @@ const styles = {
   stepPlanItem: {
     background: "rgba(7,23,15,0.50)",
     border: "1px solid rgba(255,255,255,0.07)",
-    borderRadius: 14,
-    padding: 14
+    borderRadius: 16,
+    padding: 16
+  },
+  stepPlanHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap",
+    marginBottom: 10
+  },
+  stepNumberBadge: {
+    color: GOLD,
+    border: "1px solid rgba(200,169,106,0.42)",
+    borderRadius: 999,
+    padding: "5px 9px",
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: "0.03em"
+  },
+  stepPlanTitle: {
+    color: TEXT,
+    fontSize: 23,
+    lineHeight: 1.2
+  },
+  stepActionText: {
+    color: TEXT,
+    fontSize: 16,
+    lineHeight: 1.55,
+    margin: "0 0 10px 0"
+  },
+  stepMiniMeta: {
+    display: "grid",
+    gap: 6,
+    color: MUTED,
+    fontSize: 13,
+    lineHeight: 1.45
   },
   ctaCard: {
     marginTop: 40,
