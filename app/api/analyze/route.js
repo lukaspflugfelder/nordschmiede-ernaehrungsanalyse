@@ -304,6 +304,30 @@ function calculateNutritionTargets(form) {
     5 * age +
     gender.constant;
 
+  if (age < 18 || age > 100) {
+    return {
+      error: "Bitte gib ein Alter zwischen 18 und 100 Jahren ein."
+    };
+  }
+
+  if (height < 120 || height > 230) {
+    return {
+      error: "Bitte gib eine Körpergröße zwischen 120 und 230 cm ein."
+    };
+  }
+
+  if (currentWeight < 30 || currentWeight > 350) {
+    return {
+      error: "Bitte gib ein realistisches aktuelles Gewicht zwischen 30 und 350 kg ein."
+    };
+  }
+
+  if (targetWeightInput && (targetWeightInput < 30 || targetWeightInput > 350)) {
+    return {
+      error: "Bitte gib ein realistisches Zielgewicht zwischen 30 und 350 kg ein."
+    };
+  }
+
   const bmr = Math.max(900, bmrRaw);
   const tdee = bmr * activity.factor;
 
@@ -395,6 +419,17 @@ function calculateNutritionTargets(form) {
   if (dietStrategy === "low_carb" && carbs > 140) {
     carbs = 140;
     fat = roundTo((targetCalories - protein * 4 - carbs * 4) / 9, 5);
+  }
+
+  const minimumProteinForMuscleGain = roundTo(1.6 * currentWeight, 5);
+
+  if (
+    goal === "zunehmen" &&
+    (targetCalories < tdee || protein < minimumProteinForMuscleGain)
+  ) {
+    return {
+      error: "Die berechneten Zielwerte sind für Muskelaufbau nicht plausibel. Bitte prüfe die Körperdaten."
+    };
   }
 
   const sollZustand = {
