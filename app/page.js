@@ -36,6 +36,55 @@ const emptyForm = {
   cookingTime: ""
 };
 
+function createAnalysisInputSignature(formData, daysData) {
+  return JSON.stringify({
+    form: { ...emptyForm, ...(formData || {}) },
+    days: Array.isArray(daysData)
+      ? Array.from({ length: 7 }, (_, index) => ({
+          ...emptyDay,
+          ...(daysData[index] || {})
+        }))
+      : Array.from({ length: 7 }, () => ({ ...emptyDay }))
+  });
+}
+
+function parseClientNumber(value) {
+  const normalized = String(value || "")
+    .replace(",", ".")
+    .replace(/[^\d.-]/g, "");
+
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function isLegacyReportCompatible(reportData, formData) {
+  const currentWeight = parseClientNumber(formData?.weight);
+  const targetWeight = parseClientNumber(formData?.targetWeight);
+  const goalText = String(formData?.goal || "").toLowerCase();
+  const reportedReferenceWeight = Number(reportData?.berechnungslogik?.referenzgewicht) || 0;
+  const targetProtein = Number(reportData?.sollZustand?.protein) || 0;
+  const expectedReferenceWeight =
+    goalText.includes("abnehm") && targetWeight > 0 ? targetWeight : currentWeight;
+
+  if (!currentWeight || !targetProtein) return false;
+
+  if (
+    reportedReferenceWeight > 0 &&
+    Math.abs(reportedReferenceWeight - expectedReferenceWeight) > 0.2
+  ) {
+    return false;
+  }
+
+  if (
+    (goalText.includes("muskel") || goalText.includes("aufbau")) &&
+    (targetProtein < currentWeight * 1.4 || targetProtein > currentWeight * 2.4)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 const exampleForm = {
   age: "31",
   height: "180",
@@ -157,11 +206,27 @@ export default function Page() {
       if (saved) {
         const parsed = JSON.parse(saved);
 
-        if (parsed.form) setForm({ ...emptyForm, ...parsed.form });
-        if (parsed.days) setDays(normalizeDays(parsed.days));
-        if (parsed.report) setReport(parsed.report);
-        if (typeof parsed.activeStep === "number") setActiveStep(parsed.activeStep);
-        if (Array.isArray(parsed.stepCheckins)) setStepCheckins(parsed.stepCheckins);
+        const restoredForm = { ...emptyForm, ...(parsed.form || {}) };
+        const restoredDays = normalizeDays(parsed.days);
+        const currentSignature = createAnalysisInputSignature(restoredForm, restoredDays);
+        const storedSignature = parsed.report?._inputSignature || "";
+        const reportIsCompatible = Boolean(
+          parsed.report &&
+          (
+            storedSignature === currentSignature ||
+            (!storedSignature && isLegacyReportCompatible(parsed.report, restoredForm))
+          )
+        );
+
+        setForm(restoredForm);
+        setDays(restoredDays);
+
+        if (reportIsCompatible) {
+          setReport(parsed.report);
+          if (typeof parsed.activeStep === "number") setActiveStep(parsed.activeStep);
+          if (Array.isArray(parsed.stepCheckins)) setStepCheckins(parsed.stepCheckins);
+        }
+
         if (typeof parsed.wizardStep === "number") setWizardStep(parsed.wizardStep);
         if (typeof parsed.activeDay === "number") setActiveDay(parsed.activeDay);
         if (typeof parsed.showDetails === "boolean") setShowDetails(parsed.showDetails);
@@ -232,8 +297,17 @@ export default function Page() {
     });
   }
 
+  function invalidateAnalysisAfterInputChange() {
+    setReport(null);
+    setActiveStep(0);
+    setStepCheckins([]);
+    setShowDetails(false);
+    setResultTab("overview");
+  }
+
   function updateForm(field, value) {
     setForm(prev => ({ ...prev, [field]: value }));
+    invalidateAnalysisAfterInputChange();
   }
 
   function updateDay(index, field, value) {
@@ -242,6 +316,7 @@ export default function Page() {
       copy[index] = { ...copy[index], [field]: value };
       return copy;
     });
+    invalidateAnalysisAfterInputChange();
   }
 
   function fillExample() {
@@ -640,6 +715,7 @@ export default function Page() {
       copy[activeDay] = { ...copy[activeDay - 1] };
       return copy;
     });
+    invalidateAnalysisAfterInputChange();
   }
 
   function printAnalysis() {
@@ -685,7 +761,10 @@ export default function Page() {
         throw new Error("Es wurde kein Report zurückgegeben.");
       }
 
-      setReport(data.report);
+      setReport({
+        ...data.report,
+        _inputSignature: createAnalysisInputSignature(form, days)
+      });
       setActiveStep(0);
       setStepCheckins([]);
       setWizardStep(3);
