@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 
 const OPENAI_URL = "https://api.openai.com/v1/responses";
 const MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
-const SOLVER_VERSION = "v45_release_candidate_quality_gate";
+const SOLVER_VERSION = "v46_goal_consistent_targets";
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -146,12 +146,8 @@ function normalizeGoal(goal) {
 }
 
 function detectDietStrategy(form) {
-  const text = [
-    form.dietType,
-    form.goal,
-    form.dislikes,
-    form.intolerances
-  ].join(" ").toLowerCase();
+  const text = normalizeText(form.dietType).toLowerCase()
+    .replace(/\b(kein\w*|nicht|ohne)\s+(keto\w*|ketogen\w*|low[ -]?carb)\b/g, " ");
 
   const isKeto =
     text.includes("keto") ||
@@ -282,17 +278,24 @@ function getGenderConstant(gender) {
 }
 
 function calculateNutritionTargets(form) {
-  const age = parseNumber(form.age);
-  const height = parseNumber(form.height);
-  const currentWeight = parseNumber(form.weight);
-  const targetWeightInput = parseNumber(form.targetWeight);
+  // Body data must be a single value; stripping arbitrary text can turn 6/8 into 68.
+  const bodyNumber = (value, unit) => {
+    const text = String(value ?? "").trim();
+    const match = text.match(new RegExp(`^(\\d+(?:[.,]\\d+)?)\\s*(?:${unit})?$`, "i"));
+    return match ? Number(match[1].replace(",", ".")) : NaN;
+  };
+  const age = bodyNumber(form.age, "Jahre?|years?");
+  const height = bodyNumber(form.height, "cm");
+  const currentWeight = bodyNumber(form.weight, "kg");
+  const targetWeightInput = String(form.targetWeight ?? "").trim()
+    ? bodyNumber(form.targetWeight, "kg") : 0;
   const targetWeight = targetWeightInput > 0 ? targetWeightInput : currentWeight;
   const goal = normalizeGoal(form.goal);
   const dietStrategy = detectDietStrategy(form);
   const activity = parseActivityFactor(form.activityLevel);
   const gender = getGenderConstant(form.gender);
 
-  if (!age || !height || !currentWeight) {
+  if (![age, height, currentWeight, targetWeightInput].every(Number.isFinite)) {
     return {
       error: "Bitte fülle Alter, Größe und aktuelles Gewicht aus, damit Zielkalorien berechnet werden können."
     };
@@ -328,6 +331,15 @@ function calculateNutritionTargets(form) {
     };
   }
 
+  const goalText = normalizeText(form.goal).toLowerCase();
+  const hasGainGoal = /zunehm|aufbau|muskel|masse|bulk/.test(goalText);
+  const hasLossGoal = /abnehm|reduzier|fettverlust|gewicht verlieren|definition/.test(goalText);
+  if ((hasGainGoal && hasLossGoal) ||
+      (goal === "zunehmen" && targetWeight < currentWeight) ||
+      (goal === "abnehmen" && targetWeight > currentWeight)) {
+    return { error: "Ziel und Zielgewicht widersprechen sich. Bitte wähle zuerst ein eindeutiges Hauptziel: Muskelaufbau/Zunahme, Abnehmen oder Gewicht halten." };
+  }
+
   const bmr = Math.max(900, bmrRaw);
   const tdee = bmr * activity.factor;
 
@@ -345,7 +357,9 @@ function calculateNutritionTargets(form) {
     goalLabel = "Zunehmen / Muskelaufbau";
   }
 
-  let targetCalories = roundTo(targetCaloriesRaw, 50);
+  let targetCalories = goal === "zunehmen"
+    ? Math.ceil(targetCaloriesRaw / 50) * 50
+    : roundTo(targetCaloriesRaw, 50);
 
   const referenceWeight = goal === "abnehmen" && targetWeight > 0 ? targetWeight : currentWeight;
 
@@ -421,7 +435,7 @@ function calculateNutritionTargets(form) {
     fat = roundTo((targetCalories - protein * 4 - carbs * 4) / 9, 5);
   }
 
-  const minimumProteinForMuscleGain = roundTo(1.6 * currentWeight, 5);
+  const minimumProteinForMuscleGain = 1.6 * currentWeight;
 
   if (
     goal === "zunehmen" &&
@@ -430,6 +444,16 @@ function calculateNutritionTargets(form) {
     return {
       error: "Die berechneten Zielwerte sind für Muskelaufbau nicht plausibel. Bitte prüfe die Körperdaten."
     };
+  }
+
+  const macroCalories = protein * 4 + fat * 9 + carbs * 4;
+  if (![targetCalories, protein, fat, carbs].every(Number.isFinite) ||
+      Math.min(protein, fat, carbs) < 0 || Math.abs(macroCalories - targetCalories) > 50) {
+    return { error: "Aus diesen Körperdaten lassen sich keine konsistenten Kalorien- und Makroziele ableiten. Bitte prüfe die Angaben." };
+  }
+
+  if (dietStrategy === "keto" && goal === "zunehmen") {
+    macroNote += " Muskelaufbau und Keto schließen sich nicht grundsätzlich aus. Energie und Protein werden dafür nicht abgesenkt. Die Kohlenhydratgrenze garantiert keine Ketose; Trainingsleistung und Gewichtsverlauf müssen beobachtet werden.";
   }
 
   const sollZustand = {
@@ -477,6 +501,17 @@ function calculateNutritionTargets(form) {
     goal,
     activity
   };
+}
+
+function buildEnergyExplanation(report) {
+  const calculation = report.berechnungslogik;
+  const target = report.sollZustand;
+  const delta = report.differenz.kcal;
+  const direction = delta > 0 ? "über" : "unter";
+  const intake = delta === 0
+    ? "Die geschätzte bisherige Energiezufuhr liegt im Zielbereich."
+    : `Die geschätzte bisherige Energiezufuhr liegt ca. ${Math.abs(delta)} kcal ${direction} diesem Ziel. Diese Differenz beschreibt die Änderung gegenüber der bisherigen Ernährung, kein Defizit gegenüber dem Erhaltungsbedarf.`;
+  return `Geschätzter Erhaltungsbedarf: ${calculation.tdee} kcal/Tag. Ziel (${calculation.ziel}): ${target.kcal} kcal/Tag und ${target.protein} g Protein/Tag. ${intake} ${calculation.hinweis}`;
 }
 
 function calculateDifference(istZustand, sollZustand) {
@@ -643,6 +678,21 @@ function sumStepDailyEffects(steps) {
       kohlenhydrate: roundTo(total.kohlenhydrate, 1)
     }
   };
+}
+
+function validatePlanGoalConsistency(report) {
+  const total = report.fahrplanSolverStatus?.geplanteTageswirkung ||
+    sumStepDailyEffects(report.zehnSchrittePlan).total;
+  const intake = report.istZustand;
+  if (report.berechnungslogik.zielCode === "zunehmen" && total.kcal < 0 &&
+      Number(intake.kcal) + total.kcal < report.berechnungslogik.tdee) {
+    return "Der Fahrplan würde die Energiezufuhr beim Muskelaufbau unter den geschätzten Erhaltungsbedarf senken. Bitte erstelle die Analyse erneut.";
+  }
+  if (report.berechnungslogik.ernaehrungsstrategie === "keto" && total.kohlenhydrate > 0 &&
+      Number(intake.kohlenhydrate) + total.kohlenhydrate > 50) {
+    return "Der Fahrplan würde die Kohlenhydrate über das Keto-Ziel erhöhen. Bitte prüfe die Ernährungsstrategie oder erstelle die Analyse erneut.";
+  }
+  return null;
 }
 
 function targetCorridor(target, type) {
@@ -4023,6 +4073,9 @@ DIFFERENZLOGIK:
 Differenz = Ist minus Soll.
 - positive Werte = über Ziel
 - negative Werte = unter Ziel
+- Eine Reduktion gegenüber der bisherigen Zufuhr ist kein Defizit gegenüber dem Erhaltungsbedarf (TDEE).
+- Bei Muskelaufbau/Zunahme liegt das Energieziel über dem Erhaltungsbedarf. Empfiehl kein Defizit gegenüber TDEE und senke Protein nicht zugunsten von Keto-Fett.
+- Keto ist eine Kohlenhydratstrategie, kein Abnehmziel. Versprich weder Ketose noch Muskelzuwachs.
 
 SCHÄTZLOGIK IST-ZUSTAND:
 - istZustand = geschätzter durchschnittlicher Tageswert aus den 7 Tagen.
@@ -4620,15 +4673,23 @@ export async function POST(request) {
     report.fahrplanZiel = buildFahrplanZiel(report.differenz);
     report.fahrplanWochenziel = buildFahrplanWochenziel(report.differenz);
     report = buildDeterministicTenStepPlan(report, days);
+    const planError = validatePlanGoalConsistency(report);
+    if (planError) {
+      return Response.json({ error: "Zielkonflikt im Fahrplan", details: planError }, { status: 422 });
+    }
     report.fahrplanWirkung = buildFahrplanWirkung(report.differenz, report.zehnSchrittePlan);
     report.fahrplanBilanz = buildFahrplanBilanz(report.differenz, report.fahrplanWirkung);
     report = sanitizePotentialItems(report);
     report = sanitizeStableBuildingBlocks(report);
+    report.zusammenfassung = buildEnergyExplanation(report);
+    report.zentralesProblem = `Die geschätzte Ernährung wird mit dem Ziel ${targets.sollZustand.kcal} kcal und ${targets.sollZustand.protein} g Protein pro Tag verglichen. Der Abstand zwischen Ist und Soll ist nicht mit einem Defizit gegenüber dem Erhaltungsbedarf gleichzusetzen.`;
+    report._calculationVersion = SOLVER_VERSION;
 
     return Response.json({
       report,
       meta: {
         model: MODEL,
+        calculationVersion: SOLVER_VERSION,
         generatedAt: new Date().toISOString(),
         calculation: targets.berechnungslogik
       }

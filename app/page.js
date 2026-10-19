@@ -8,6 +8,7 @@ const GREEN = "#0d2418";
 const TEXT = "#f4efe4";
 const MUTED = "#cfc6b3";
 const STORAGE_KEY = "nordschmiede_ernaehrungsanalyse_state_v24_pdf_final";
+const CALCULATION_VERSION = "v46_goal_consistent_targets";
 const KORPERKOMPASS_URL = "https://www.nordschmiede.com/korperkompass";
 const LOGO_URL = "/nordschmiede-rune.png";
 const PRIVACY_URL = "https://www.nordschmiede.com/datenschutz";
@@ -46,43 +47,6 @@ function createAnalysisInputSignature(formData, daysData) {
         }))
       : Array.from({ length: 7 }, () => ({ ...emptyDay }))
   });
-}
-
-function parseClientNumber(value) {
-  const normalized = String(value || "")
-    .replace(",", ".")
-    .replace(/[^\d.-]/g, "");
-
-  const number = Number(normalized);
-  return Number.isFinite(number) ? number : 0;
-}
-
-function isLegacyReportCompatible(reportData, formData) {
-  const currentWeight = parseClientNumber(formData?.weight);
-  const targetWeight = parseClientNumber(formData?.targetWeight);
-  const goalText = String(formData?.goal || "").toLowerCase();
-  const reportedReferenceWeight = Number(reportData?.berechnungslogik?.referenzgewicht) || 0;
-  const targetProtein = Number(reportData?.sollZustand?.protein) || 0;
-  const expectedReferenceWeight =
-    goalText.includes("abnehm") && targetWeight > 0 ? targetWeight : currentWeight;
-
-  if (!currentWeight || !targetProtein) return false;
-
-  if (
-    reportedReferenceWeight > 0 &&
-    Math.abs(reportedReferenceWeight - expectedReferenceWeight) > 0.2
-  ) {
-    return false;
-  }
-
-  if (
-    (goalText.includes("muskel") || goalText.includes("aufbau")) &&
-    (targetProtein < currentWeight * 1.4 || targetProtein > currentWeight * 2.4)
-  ) {
-    return false;
-  }
-
-  return true;
 }
 
 const exampleForm = {
@@ -212,10 +176,8 @@ export default function Page() {
         const storedSignature = parsed.report?._inputSignature || "";
         const reportIsCompatible = Boolean(
           parsed.report &&
-          (
-            storedSignature === currentSignature ||
-            (!storedSignature && isLegacyReportCompatible(parsed.report, restoredForm))
-          )
+          parsed.report._calculationVersion === CALCULATION_VERSION &&
+          storedSignature === currentSignature
         );
 
         setForm(restoredForm);
@@ -413,7 +375,10 @@ export default function Page() {
           ? "Fett liegt etwa " + Math.abs(fat) + " g unter dem Ziel"
           : "Fett liegt ungefähr im Zielbereich";
 
-    return kcalText + " — " + proteinText + ", " + fatText + ". Priorität: erst die größten Kalorien- und Strukturmuster verändern, dann Feintuning.";
+    const priority = currentReport.berechnungslogik?.zielCode === "zunehmen"
+      ? "Priorität: ausreichend Energie und Protein für Muskelaufbau. Der Abstand zum Ziel ist kein Defizit gegenüber dem Erhaltungsbedarf."
+      : "Priorität: die Energiezufuhr und Proteinversorgung schrittweise an das Ziel anpassen.";
+    return kcalText + ". " + proteinText + ", " + fatText + ". " + priority;
   }
 
   function getCurrentStepText() {
