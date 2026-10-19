@@ -1,13 +1,18 @@
 const { readFileSync } = require("node:fs");
 const vm = require("node:vm");
 const assert = require("node:assert/strict");
-const { test } = require("node:test");
+const { test, before } = require("node:test");
 
 // Exercise the route's actual pure functions without making paid model requests.
 const source = readFileSync("app/api/analyze/route.js", "utf8");
-const context = vm.createContext({ process, console });
-vm.runInContext(source.replace(/^export /gm, ""), context);
-const calculate = context.calculateNutritionTargets;
+let context;
+let calculate;
+before(async () => {
+  const profileRules = await import("../app/api/analyze/user-profile.mjs");
+  context = vm.createContext({ process, console, profileRules, structuredClone });
+  vm.runInContext(source.replace(/^import .*;\r?\n/gm, "").replace(/^export /gm, ""), context);
+  calculate = context.calculateNutritionTargets;
+});
 const profile = {
   age: "70", height: "178", weight: "68", targetWeight: "70",
   gender: "m", goal: "Muskelaufbau", dietType: "Keto", activityLevel: "1.5"

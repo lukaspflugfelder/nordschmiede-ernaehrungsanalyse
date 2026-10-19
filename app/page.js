@@ -8,7 +8,7 @@ const GREEN = "#0d2418";
 const TEXT = "#f4efe4";
 const MUTED = "#cfc6b3";
 const STORAGE_KEY = "nordschmiede_ernaehrungsanalyse_state_v24_pdf_final";
-const CALCULATION_VERSION = "v46_goal_consistent_targets";
+const CALCULATION_VERSION = "v47_shared_user_profile";
 const KORPERKOMPASS_URL = "https://www.nordschmiede.com/korperkompass";
 const LOGO_URL = "/nordschmiede-rune.png";
 const PRIVACY_URL = "https://www.nordschmiede.com/datenschutz";
@@ -232,6 +232,7 @@ export default function Page() {
   }, [wizardStep, activeDay, resultTab, activeStep, hydrated]);
 
   const consentReady = aiNoticeAccepted && privacyNoticeAccepted;
+  const planStepCount = report?.zehnSchrittePlan?.length || 0;
   const analysisDisabled = loading || !consentReady;
 
   function normalizeDays(inputDays) {
@@ -539,105 +540,25 @@ export default function Page() {
     const real = Number(status.echteBilanzschritte) || 0;
     const confirmations = Number(status.bestaetigungenProSchritt) || 3;
     if (status.modus === "v38_kumulativer_30_tage_solver") {
-      return "Bilanzprüfung: Die App berechnet " + real + " kumulative Umbauten. Jeder Schritt wird " + confirmations + "x bestätigt, bleibt danach aktiv und nach Schritt 10 zählt die Summe aller Schritte.";
+      return "Bilanzprüfung: Die App berechnet " + real + " kumulative Umbauten. Jeder Schritt wird " + confirmations + "x bestätigt, bleibt danach aktiv und nach dem letzten Schritt zählt die Summe aller Schritte.";
     }
     return "Bilanzprüfung: Die geplante Wirkung ist eine Näherung und sollte bei ungenauen Freitextmengen nach der ersten Woche überprüft werden.";
   }
 
   function createFahrplanIntro(reportData) {
     if (reportData?.fahrplanBilanz) return reportData.fahrplanBilanz;
-    return "Dieser Fahrplan ist kein allgemeiner Ernährungsplan. Er ist ein kumulativer 30-Tage-Aufbau: Jeder Schritt wird 3x bestätigt, bleibt danach aktiv und nach Schritt 10 zählt die Summe aller Umbauten.";
+    return "Jeder Schritt wird 3x bestätigt, bleibt danach aktiv und nach dem letzten Schritt zählt die Summe aller Umbauten.";
   }
 
   function getStableBuildingBlocks() {
-    const sourceItems = [];
-
-    if (Array.isArray(report?.stabileBausteine)) {
-      report.stabileBausteine.forEach(item => {
-        sourceItems.push({
-          lebensmittel: item?.lebensmittel || "",
-          einordnung: [item?.begruendung, item?.hinweis].filter(Boolean).join(" ")
-        });
-      });
-    }
-
-    if (Array.isArray(report?.lebensmittelAnalyse)) {
-      report.lebensmittelAnalyse.forEach(item => {
-        sourceItems.push({
-          lebensmittel: item?.lebensmittel || "",
-          einordnung: item?.einordnung || ""
-        });
-      });
-    }
-
-    const hardReject = [
-      "cola",
-      "schokolade",
-      "schokoriegel",
-      "chips",
-      "pommes",
-      "döner",
-      "doener",
-      "burger",
-      "pizza",
-      "nutella",
-      "butter",
-      "sahnesauce",
-      "sahne",
-      "mayo",
-      "mayonnaise",
-      "wurst",
-      "aufschnitt",
-      "nüsse",
-      "nuss",
-      "fett-treiber",
-      "fetttreiber",
-      "problem",
-      "überschuss",
-      "zuckerquelle",
-      "stark verarbeitet"
-    ];
-
-    const allowed = [
-      "hähnchen",
-      "haehnchen",
-      "pute",
-      "putenbrust",
-      "thunfisch",
-      "ei",
-      "eier",
-      "magerquark",
-      "quark",
-      "joghurt",
-      "skyr",
-      "gemüse",
-      "gemuese",
-      "salat",
-      "beeren",
-      "wasser",
-      "tee",
-      "reis",
-      "kartoffel",
-      "kartoffeln",
-      "käse",
-      "kaese"
-    ];
-
     const seen = new Set();
-
-    return sourceItems
-      .filter(item => item.lebensmittel)
+    return (Array.isArray(report?.stabileBausteine) ? report.stabileBausteine : [])
+      .map(item => ({ lebensmittel: item.lebensmittel,
+        einordnung: [item.begruendung, item.hinweis].filter(Boolean).join(" ") }))
       .filter(item => {
-        const text = (item.lebensmittel + " " + item.einordnung).toLowerCase();
-        const hasAllowed = allowed.some(keyword => text.includes(keyword));
-        const hasReject = hardReject.some(keyword => text.includes(keyword));
-
-        if (!hasAllowed || hasReject) return false;
-
-        const key = item.lebensmittel.toLowerCase().trim();
-        if (seen.has(key)) return false;
+        const key = String(item.lebensmittel || "").toLowerCase().trim();
+        if (!key || seen.has(key)) return false;
         seen.add(key);
-
         return true;
       })
       .slice(0, 6);
@@ -806,6 +727,8 @@ export default function Page() {
           }
 
           .pdf-page {
+            display: flex !important;
+            flex-direction: column !important;
             width: 180mm !important;
             min-height: 245mm !important;
             height: auto !important;
@@ -1004,6 +927,18 @@ export default function Page() {
             font-size: 20px !important;
             line-height: 1.35 !important;
             margin: 3mm 0 0 0 !important;
+          }
+
+          .pdf-summary-page .pdf-summary-hero {
+            padding: 6mm !important;
+          }
+
+          .pdf-summary-page .pdf-summary-hero h2 {
+            font-size: 18px !important;
+          }
+
+          .pdf-summary-page .pdf-score-card {
+            padding: 4mm !important;
           }
 
           .pdf-score-grid {
@@ -1358,7 +1293,9 @@ export default function Page() {
           }
 
           .pdf-footer {
-            position: absolute !important;
+            position: static !important;
+            margin-top: auto !important;
+            flex-shrink: 0 !important;
             left: 16mm !important;
             right: 16mm !important;
             bottom: 9mm !important;
@@ -1374,6 +1311,10 @@ export default function Page() {
           .pdf-footer-inverted {
             color: rgba(18, 52, 33, 0.58) !important;
           }
+
+          .pdf-page:not(.pdf-cover-page) > :nth-last-child(2) {
+            margin-bottom: 8mm !important;
+          }
         }
 
         .pdf-report {
@@ -1384,7 +1325,7 @@ export default function Page() {
           .hero-grid,
           .two-column-grid,
           .result-grid {
-            grid-template-columns: 1fr !important;
+            grid-template-columns: minmax(0, 1fr) !important;
           }
 
           .wizard-card {
@@ -1392,7 +1333,8 @@ export default function Page() {
           }
 
           .page-title {
-            font-size: 42px !important;
+            font-size: 30px !important;
+            overflow-wrap: anywhere;
           }
         }
       `}</style>
@@ -1795,7 +1737,7 @@ export default function Page() {
                   <>
                     <div style={styles.correctionCard} className="print-section">
                       <span style={styles.kicker}>Ziel dieses Fahrplans</span>
-                      <h2 style={styles.h2}>Die 10 Schritte bauen deinen Durchschnittstag um</h2>
+                      <h2 style={styles.h2}>{planStepCount} geprüfte Schritte für deinen Alltag</h2>
                       <p style={styles.bodyText}>{fahrplanIntro}</p>
                       <div style={styles.correctionGrid}>
                         {fahrplanTarget.map((item, index) => (
@@ -1808,7 +1750,7 @@ export default function Page() {
 
                       {fahrplanPlanBalance.length > 0 && (
                         <>
-                          <p style={styles.smallText}><strong>Geplante Wirkung nach Schritt 10:</strong></p>
+                          <p style={styles.smallText}><strong>Geplante Wirkung nach dem letzten Schritt:</strong></p>
                           <div style={styles.correctionGrid}>
                             {fahrplanPlanBalance.map((item, index) => (
                               <div key={index} style={styles.correctionItem}>
@@ -1822,13 +1764,13 @@ export default function Page() {
                       )}
 
                       <p style={styles.smallText}>
-                        Die App rechnet die Wirkung aller 10 Schritte kumuliert. Jeder Schritt wird 3x bestätigt, bleibt danach aktiv und nach Schritt 10 zählt die Summe aller Umbauten.
+                        Jeder Schritt wird 3x bestätigt und bleibt danach aktiv. Die geplante Wirkung ergibt sich aus der Summe aller Schritte.
                       </p>
                     </div>
 
                     <div style={styles.focusCard} className="print-section">
                       <span style={styles.kicker}>Dein aktueller Umsetzungsschritt</span>
-                      <h2 style={styles.h2}>Schritt {activeStep + 1} von 10</h2>
+                      <h2 style={styles.h2}>Schritt {activeStep + 1} von {planStepCount}</h2>
 
                       <div style={styles.structuredStepGrid}>
                         <div style={styles.stepMainBox}>
@@ -2018,7 +1960,7 @@ export default function Page() {
                       <span style={styles.kicker}>Bericht</span>
                       <h2 style={styles.h2}>Dein Analysebericht</h2>
                       <p style={styles.bodyText}>
-                        Dieser Bericht fasst deine aktuelle Ernährungsrealität zusammen. Der komplette 10-Schritte-Fahrplan ist sichtbar, aber die App führt dich bewusst als 30-Tage-Aufbau Schritt für Schritt durch die Umsetzung.
+                        Dieser Bericht fasst deine aktuelle Ernährungsrealität zusammen. Der komplette Fahrplan ist sichtbar und führt dich Schritt für Schritt durch die Umsetzung.
                       </p>
 
                       <div style={styles.navigationRow} className="no-print">
@@ -2089,7 +2031,7 @@ export default function Page() {
 
                       {fahrplanPlanBalance.length > 0 && (
                         <>
-                          <p style={styles.smallText}><strong>Geplante Wirkung nach Schritt 10:</strong></p>
+                          <p style={styles.smallText}><strong>Geplante Wirkung nach dem letzten Schritt:</strong></p>
                           <div style={styles.correctionGrid}>
                             {fahrplanPlanBalance.map((item, index) => (
                               <div key={index} style={styles.correctionItem}>
@@ -2103,14 +2045,14 @@ export default function Page() {
                       )}
 
                       <p style={styles.smallText}>
-                        Die App rechnet die Wirkung aller 10 Schritte kumuliert. Jeder Schritt wird 3x bestätigt, bleibt danach aktiv und nach Schritt 10 zählt die Summe aller Umbauten.
+                        Jeder Schritt wird 3x bestätigt und bleibt danach aktiv. Die geplante Wirkung ergibt sich aus der Summe aller Schritte.
                       </p>
                     </div>
 
                     <div style={styles.card} className="print-section pdf-page-break">
-                      <h2 style={styles.h2}>Dein 10-Schritte-Fahrplan</h2>
+                      <h2 style={styles.h2}>Dein Fahrplan mit {planStepCount} Schritten</h2>
                       <p style={styles.bodyText}>
-                        Starte nicht mit allen Schritten gleichzeitig. Jeder Schritt wird 3x bestätigt, bleibt danach aktiv und der nächste Schritt kommt dazu. Nach Schritt 10 soll die Summe aller Umbauten deinen durchschnittlichen Tag in Richtung Sollzustand bringen.
+                        Jeder Schritt wird 3x bestätigt und bleibt danach aktiv. Mit dem nächsten Schritt kommt eine weitere Änderung dazu.
                       </p>
 
                       <div style={styles.stepPlanList}>
@@ -2487,7 +2429,7 @@ function PdfReport({
     pdfCorrectionTarget(report.differenz?.fett, "g", "Fett"),
     pdfCorrectionTarget(report.differenz?.kohlenhydrate, "g", "Kohlenhydrate")
   ];
-  const fahrplanBilanz = report.fahrplanBilanz || "Die 10 Schritte sind als Umbau deiner bisherigen Ernährung gedacht: Sie sollen die gemessene Differenz zwischen Ist- und Soll-Zustand schrittweise schließen.";
+  const fahrplanBilanz = report.fahrplanBilanz || "Die geprüften Schritte passen deine bisherige Ernährung schrittweise an das persönliche Ziel an.";
   const weeklyGoal = report.fahrplanWochenziel?.wochenziel || null;
 
   return (
@@ -2523,7 +2465,7 @@ function PdfReport({
         </div>
       </section>
 
-      <section className="pdf-page pdf-page-light">
+      <section className="pdf-page pdf-page-light pdf-summary-page">
         <PdfHeader eyebrow="01" title="Executive Summary" />
 
         <div className="pdf-summary-hero">
@@ -2545,7 +2487,7 @@ function PdfReport({
 
           <div className="pdf-card">
             <span>Schätzqualität</span>
-            <p>{report.schaetzHinweis || report.istZustand?.schaetzqualitaet || "Die Werte sind Näherungen auf Basis deiner Angaben."}</p>
+            <p>{report.schaetzHinweisOhneProfil || report.schaetzHinweis || report.istZustand?.schaetzqualitaet || "Die Werte sind Näherungen auf Basis deiner Angaben."}</p>
           </div>
         </div>
 
@@ -2591,7 +2533,7 @@ function PdfReport({
           <div>
             <span>Starte hier</span>
             <h2>Der erste Hebel zählt mehr als zehn gute Vorsätze.</h2>
-            <p>{cleanStepText(firstStep)}</p>
+            <p>{pdfReadableStep(firstStep, cleanStepText).action}</p>
           </div>
         </div>
 
@@ -2627,32 +2569,23 @@ function PdfReport({
           <p>{report.naechsteKonkreteAenderung}</p>
         </div>
 
-        <div className="pdf-card pdf-card-wide">
-          <span>Größte Hebel</span>
-          <ul className="pdf-hebel-list">
-            {report.groessteHebel?.slice(0, 5).map((item, index) => (
-              <li key={index}>{item}</li>
-            ))}
-          </ul>
-        </div>
-
         <PdfFooter page="02" />
       </section>
 
       <section className="pdf-page pdf-page-light">
-        <PdfHeader eyebrow="03" title="Differenz schließen · Schritte 1–5" />
+        <PdfHeader eyebrow="03" title={`Dein Fahrplan · Schritte 1–${Math.min(5, steps.length)}`} />
         <RoadmapList steps={stepsOne} offset={0} cleanStepText={cleanStepText} />
         <PdfFooter page="03" />
       </section>
 
-      <section className="pdf-page pdf-page-light">
-        <PdfHeader eyebrow="04" title="Differenz schließen · Schritte 6–10" />
+      {stepsTwo.length > 0 && <section className="pdf-page pdf-page-light">
+        <PdfHeader eyebrow="04" title={`Dein Fahrplan · Schritte 6–${steps.length}`} />
         <RoadmapList steps={stepsTwo} offset={5} cleanStepText={cleanStepText} />
         <PdfFooter page="04" />
-      </section>
+      </section>}
 
       <section className="pdf-page pdf-page-light">
-        <PdfHeader eyebrow="05" title="Potenzial & stabile Grundlage" />
+        <PdfHeader eyebrow={stepsTwo.length ? "05" : "04"} title="Potenzial & stabile Grundlage" />
 
         <div className="pdf-two-column">
           <div className="pdf-card pdf-card-tall">
@@ -2699,11 +2632,16 @@ function PdfReport({
           </div>
         )}
 
-        <PdfFooter page="05" />
+        <PdfFooter page={stepsTwo.length ? "05" : "04"} />
       </section>
 
       <section className="pdf-page pdf-page-final">
-        <PdfHeader eyebrow="06" title="Abschluss & nächste Orientierung" />
+        <PdfHeader eyebrow={stepsTwo.length ? "06" : "05"} title="Abschluss & nächste Orientierung" />
+
+        {report.profilHinweis && <div className="pdf-card pdf-card-wide">
+          <span>Berücksichtigtes Nutzerprofil</span>
+          <p>{report.profilHinweis}</p>
+        </div>}
 
         <div className="pdf-card pdf-card-wide">
           <span>Zusammenfassung</span>
@@ -2732,7 +2670,7 @@ function PdfReport({
           </div>
         </div>
 
-        <PdfFooter page="06" inverted />
+        <PdfFooter page={stepsTwo.length ? "06" : "05"} inverted />
       </section>
     </div>
   );
