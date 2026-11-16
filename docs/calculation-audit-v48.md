@@ -37,7 +37,7 @@ skyr are alternative choices, not two independent extra portions.
 The solver compares different step counts, including zero, and selects a safe
 combined improvement. Energy cannot move away from the target; a small energy
 gap does not force calorie cutting. The operational comparison corridor is
-100 kcal, 10 g protein, 10 g fat and 20 g carbohydrate around the requested
+100 kcal, 10 g protein, 5 g fat and 20 g carbohydrate around the requested
 change. This is an app tolerance for estimated diaries, not a physiological
 guarantee. Keto additionally requires no further carbohydrate increase while
 intake is already above 50 g/day; complete coverage requires the final estimate

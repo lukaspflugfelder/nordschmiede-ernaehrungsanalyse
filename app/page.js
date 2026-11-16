@@ -2315,7 +2315,7 @@ function ConsentBox({
 
       <p style={styles.consentIntro}>
         Die Zielwerte für Kalorien und Makronährstoffe werden nach einer hinterlegten Formel berechnet.
-        Die Auswertung deiner Ernährungsmuster und die Formulierung der Handlungsschritte erfolgen KI-gestützt.
+        Die Nährwerte und die Wirkung der Handlungsschritte werden aus deinen Angaben berechnet. Die Beschreibung deiner Ernährungsmuster erfolgt KI-gestützt.
         Die Analyse dient der strukturierten Orientierung und ersetzt keine ärztliche, ernährungsmedizinische
         oder therapeutische Beratung.
       </p>

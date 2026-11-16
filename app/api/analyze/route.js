@@ -1037,6 +1037,9 @@ function patternLabelV45(candidate) {
 
 function confirmationFrequencyV45(candidate) {
   const original = cleanSentencePart(candidate?.frequency || "");
+  if (candidate.key?.startsWith("addition_")) {
+    return `3 passende Situationen bestätigen; anschließend beibehalten. Geplant: ${original}. Diese Portion ist eine neue Ergänzung.`;
+  }
   const group = String(candidate?.group || candidate?.key || "").toLowerCase();
   const days = uniqueNumbers(candidate?.days || []);
   const countText = days.length ? "In deiner Testwoche kam dieses Muster ca. " + days.length + "x vor." : (original ? "Ausgangshäufigkeit: " + original + "." : "");

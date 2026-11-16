@@ -1,7 +1,7 @@
 import { FOOD_CATALOG, foodIsAllowed } from './user-profile.mjs';
 import { METRICS, emptyNutrients, nutrients } from './nutrition-ledger.mjs';
 
-export const TOLERANCE = { kcal: 100, protein: 10, fett: 10, kohlenhydrate: 20 };
+export const TOLERANCE = { kcal: 100, protein: 10, fett: 5, kohlenhydrate: 20 };
 export function planWithinCorridor(effect, target) {
   return METRICS.every(key => Math.abs((effect[key] || 0) - target[key]) <= TOLERANCE[key]);
 }
@@ -61,7 +61,7 @@ export function buildVerifiedCandidates(ledger, profile, target) {
         const portions = [...new Set(entries.map(entry => `${entry.amount} → ${Math.round(entry.amount * (1 + fraction) * 10) / 10} ${food.unit}`))].join('; ');
         add(entries, `portion_${group}_${fraction}`, `${food.name}: Portion anpassen`,
           `Bei diesem Wochenmuster (Tag ${days}) passt du die jeweilige Portion ${food.name} an: ${portions}. Die übrige Mahlzeit bleibt gleich.`,
-          [food.id], 0, Object.fromEntries(METRICS.map(key => [key, before[key] * fraction])));
+          [food.id], catalogFood.minutes, Object.fromEntries(METRICS.map(key => [key, before[key] * fraction])));
       }
     }
     if (food.role === 'dairy' && food.unit === 'g') {

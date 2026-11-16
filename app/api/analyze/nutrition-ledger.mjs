@@ -51,9 +51,10 @@ const extraFoods = [
 
 const roles = { water: 'drink', skyr: 'dairy', skyr_lf: 'dairy', tofu: 'savory', tuna: 'savory', lentils: 'savory', chocolate: 'sweet', chips: 'snack', cheese: 'topping', yogurt: 'dairy', oats: 'cereal', bread: 'bread', oil: 'fat' };
 const portionTags = { butter: ['milk', 'lactose'], nuts: ['nuts', 'peanuts'], rice: [], pasta: ['gluten', 'eggs'], potato: [], chicken: ['meat'], turkey: ['meat'], egg: ['eggs'], quark: ['milk', 'lactose'], milk: ['milk', 'lactose'], avocado: [] };
+const prepMinutes = { rice: 20, pasta: 12, potato: 20, chicken: 15, turkey: 15, egg: 10 };
 export const INTAKE_FOODS = [
   ...FOOD_CATALOG.map(food => ({ ...food, unit: food.id === 'water' ? 'ml' : 'g', role: roles[food.id], aliases: new RegExp(food.id === 'bread' ? '(?:vollkorn)?brot|toast' : plain(food.aliases.source)) })),
-  ...extraFoods.map(food => ({ ...food, ...(food.id in portionTags ? { tags: portionTags[food.id], minutes: 0, portionAdjustable: true } : {}) }))
+  ...extraFoods.map(food => ({ ...food, ...(food.id in portionTags ? { tags: portionTags[food.id], minutes: prepMinutes[food.id] ?? 1, portionAdjustable: true } : {}) }))
 ];
 
 export function nutrients(food, amount) {
