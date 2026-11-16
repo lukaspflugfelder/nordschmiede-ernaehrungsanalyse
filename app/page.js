@@ -8,7 +8,7 @@ const GREEN = "#0d2418";
 const TEXT = "#f4efe4";
 const MUTED = "#cfc6b3";
 const STORAGE_KEY = "nordschmiede_ernaehrungsanalyse_state_v24_pdf_final";
-const CALCULATION_VERSION = "v47_shared_user_profile";
+const CALCULATION_VERSION = "v48_verified_food_ledger";
 const KORPERKOMPASS_URL = "https://www.nordschmiede.com/korperkompass";
 const LOGO_URL = "/nordschmiede-rune.png";
 const PRIVACY_URL = "https://www.nordschmiede.com/datenschutz";
@@ -487,7 +487,7 @@ export default function Page() {
   }
 
   function correctionDirection(value, unit, label) {
-    const number = Number(value) || 0;
+    const number = Math.round(Number(value) || 0);
     if (number === 0) return { label, value: "im Zielbereich", tone: "neutral" };
     if (number > 0) return { label, value: "ca. -" + Math.abs(number) + " " + unit, tone: "down" };
     return { label, value: "ca. +" + Math.abs(number) + " " + unit, tone: "up" };
@@ -505,7 +505,7 @@ export default function Page() {
 
 
   function signedDisplay(value, unit) {
-    const number = Number(value) || 0;
+    const number = Math.round(Number(value) || 0);
     if (number === 0) return "±0 " + unit;
     return (number > 0 ? "+" : "-") + Math.abs(number) + " " + unit;
   }
@@ -615,6 +615,12 @@ export default function Page() {
       return;
     }
 
+    const missingDays = days.map((day, index) => Object.values(day).some(value => String(value || "").trim()) ? null : index + 1).filter(Boolean);
+    if (days.length !== 7 || missingDays.length) {
+      setWizardStep(2);
+      setErrorText(`Bitte ergänze alle sieben Tage. Noch leer: Tag ${missingDays.join(", ")}.`);
+      return;
+    }
     setLoading(true);
     setErrorText("");
     setReport(null);
@@ -1768,7 +1774,7 @@ export default function Page() {
                       </p>
                     </div>
 
-                    <div style={styles.focusCard} className="print-section">
+                    {planStepCount > 0 && <div style={styles.focusCard} className="print-section">
                       <span style={styles.kicker}>Dein aktueller Umsetzungsschritt</span>
                       <h2 style={styles.h2}>Schritt {activeStep + 1} von {planStepCount}</h2>
 
@@ -1851,7 +1857,8 @@ export default function Page() {
                           Dein Check-in für heute wurde gespeichert. Der nächste Check-in ist morgen möglich.
                         </p>
                       )}
-                    </div>
+                    </div>}
+                    {planStepCount === 0 && <p style={styles.bodyText}>{report.naechsteKonkreteAenderung}</p>}
 
                     <div style={styles.softCtaCard} className="no-print">
                       <span style={styles.kicker}>Weiterführende Orientierung</span>
@@ -2308,7 +2315,7 @@ function ConsentBox({
 
       <p style={styles.consentIntro}>
         Die Zielwerte für Kalorien und Makronährstoffe werden nach einer hinterlegten Formel berechnet.
-        Die Auswertung deiner Ernährungsmuster und die Formulierung der Handlungsschritte erfolgen KI-gestützt.
+        Die Nährwerte und die Wirkung der Handlungsschritte werden aus deinen Angaben berechnet. Die Beschreibung deiner Ernährungsmuster erfolgt KI-gestützt.
         Die Analyse dient der strukturierten Orientierung und ersetzt keine ärztliche, ernährungsmedizinische
         oder therapeutische Beratung.
       </p>

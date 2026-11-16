@@ -1,3 +1,6 @@
+> Current calculation and planner: [v48 audit fixes](calculation-audit-v48.md).
+> Historical implementation notes below; v48 supersedes the model-estimated intake and old candidate generation.
+
 # Shared nutrition profile (v47)
 
 Every analysis now builds one profile from the normalized form and validated
