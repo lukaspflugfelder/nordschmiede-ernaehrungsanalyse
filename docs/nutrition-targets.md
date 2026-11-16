@@ -1,3 +1,6 @@
+> Current calculation and planner: [v48 audit fixes](calculation-audit-v48.md).
+> Historical implementation notes below; v48 supersedes the model-estimated intake and old candidate generation.
+
 # Nutrition target safeguards
 
 The reported failure was 1250 kcal, 10 g protein, 110 g fat and 50 g

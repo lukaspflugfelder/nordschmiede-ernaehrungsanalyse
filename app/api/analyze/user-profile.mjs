@@ -1,4 +1,4 @@
-export const PROFILE_VERSION = "v47_shared_user_profile";
+export const PROFILE_VERSION = "v48_verified_food_ledger";
 
 function plain(value) {
   return String(value || "").toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe")
@@ -168,99 +168,6 @@ export function foodIsAllowed(food, profile) {
 
 export function allowedProteinFoods(profile) {
   return FOOD_CATALOG.filter(food => food.proteinSource && foodIsAllowed(food, profile));
-}
-
-function nutrients(food, grams) {
-  return Object.fromEntries(["kcal", "protein", "fett", "kohlenhydrate"].map(key => [key, food[key] * grams / 100]));
-}
-
-function portionInText(text, food) {
-  const words = food.aliases.source;
-  const normalized = plain(text);
-  const matches = [...normalized.matchAll(new RegExp(`(\\d+(?:[.,]\\d+)?)\\s*g\\s+(?:${words})\\b`, "g"))];
-  // Multiple mentions cannot be assigned to a single substitution safely.
-  if (matches.length !== 1) return null;
-  const amount = Number(matches[0][1].replace(",", "."));
-  return amount > 0 && amount <= 1000 ? amount : null;
-}
-
-export function buildProfileCandidateConfigs(days, report) {
-  const profile = report.userProfile;
-  const proteins = allowedProteinFoods(profile);
-  const configs = [];
-  const metrics = ["kcal", "protein", "fett", "kohlenhydrate"];
-  const add = (config, before, after) => {
-    const weeklyEffect = Object.fromEntries(metrics.map(key => [key, after[key] - before[key]]));
-    if (report.differenz.kcal < 0 && weeklyEffect.kcal < 0) return;
-    if (report.differenz.kcal > 0 && weeklyEffect.kcal > 0) return;
-    configs.push({ ...config, weeklyEffect, priority: 20, type: "Ersetzen" });
-  };
-  for (const day of days) {
-    for (const meal of ["breakfast", "lunch", "dinner", "snacks"]) {
-      for (const source of FOOD_CATALOG.filter(food => !["skyr_lf", "oil", "water"].includes(food.id))) {
-        const grams = portionInText(day[meal], source);
-        if (!grams) continue;
-        for (const food of proteins) {
-          if (food.id === source.id || (source.id === "skyr" && food.id === "skyr_lf" && !profile.allergens.includes("lactose"))) continue;
-          add({
-            key: `profile_${day.tag}_${meal}_${source.id}_${food.id}`,
-            group: `profile_meal_${day.tag}_${meal}`,
-            title: `${source.name} gezielt ersetzen`,
-            action: `An Tag ${day.tag} ersetzt du die protokollierten ${grams} g ${source.name} durch ${food.portion} g ${food.name}. Zubereitungszeit mit verzehrfertigen Zutaten: ca. ${food.minutes} Minuten.`,
-            frequency: "bei diesem Wochenmuster", focus: "Energie und Protein an das persönliche Ziel anpassen",
-            why: "Die Alternative wurde gegen Ernährungsform, Ausschlüsse und Zeitbudget geprüft. Die Nährwertwirkung ist eine Schätzung.",
-            days: [day.tag], sourceIds: [`profile_meal_${day.tag}_${meal}`],
-            swapKey: `${meal}_${source.id}_${grams}_${food.id}`,
-            sourceFoodName: source.name, sourceGrams: grams,
-            targetFoodIds: [food.id], prepMinutes: food.minutes
-          }, nutrients(source, grams), nutrients(food, food.portion));
-        }
-      }
-    }
-  }
-  // Additions are explicit; their energy is included instead of silently added to a replacement.
-  if (report.differenz.kcal < 0) {
-    const additions = [
-      ...(report.differenz.protein < 0 ? proteins : []),
-      ...(report.differenz.fett < 0 ? FOOD_CATALOG.filter(food => food.id === "oil" && foodIsAllowed(food, profile)) : [])
-    ];
-    for (const food of additions) {
-      const count = Math.min(7, Math.max(1, Math.ceil(Math.abs(report.differenz.kcal) * 7 / nutrients(food, food.portion).kcal)));
-      const perEvent = nutrients(food, food.portion);
-      configs.push({
-        key: `profile_add_${food.id}`, group: food.id === "oil" ? "profile_add_fat" : "profile_add_protein",
-        title: food.id === "oil" ? "Energiequelle ergänzen" : "Proteinportion ergänzen",
-        action: `An ${count} Tagen pro Woche ergänzt du ${food.portion} g ${food.name}${food.id === "oil" ? " zu einer vorhandenen Mahlzeit" : " als zusätzliche Portion"}. Zubereitungszeit mit verzehrfertigen Zutaten: ca. ${food.minutes} Minuten. Die zusätzlichen Kalorien sind eingerechnet.`,
-        frequency: `${count}x/Woche`, focus: "Energiezufuhr zum Ziel anheben",
-        why: "Die zusätzliche Portion passt zu den erfassten Ausschlüssen und zählt in der Energiebilanz mit.",
-        days: Array.from({ length: count }, (_, i) => i + 1),
-        sourceIds: [food.id === "oil" ? "profile_add_fat" : "profile_add_protein"],
-        weeklyEffect: Object.fromEntries(metrics.map(key => [key, perEvent[key] * count])),
-        priority: 20, type: "Ergänzen", targetFoodIds: [food.id], prepMinutes: food.minutes
-      });
-    }
-  }
-  const grouped = new Map();
-  for (const candidate of configs) {
-    if (!candidate.swapKey) {
-      grouped.set(candidate.key, candidate);
-      continue;
-    }
-    const previous = grouped.get(candidate.swapKey);
-    if (!previous) grouped.set(candidate.swapKey, { ...candidate,
-      days: [...candidate.days], sourceIds: [...candidate.sourceIds], weeklyEffect: { ...candidate.weeklyEffect } });
-    else {
-      previous.days.push(...candidate.days);
-      previous.sourceIds.push(...candidate.sourceIds);
-      for (const metric of metrics) previous.weeklyEffect[metric] += candidate.weeklyEffect[metric];
-    }
-  }
-  return [...grouped.values()].map(candidate => {
-    if (!candidate.swapKey) return candidate;
-    const food = FOOD_CATALOG.find(entry => entry.id === candidate.targetFoodIds[0]);
-    return { ...candidate, frequency: `${candidate.days.length}x/Woche`,
-      action: `Bei diesem Wochenmuster (Tag ${candidate.days.join(", ")}) ersetzt du jeweils die protokollierten ${candidate.sourceGrams} g ${candidate.sourceFoodName} durch ${food.portion} g ${food.name}. Zubereitungszeit mit verzehrfertigen Zutaten: ca. ${food.minutes} Minuten.` };
-  });
 }
 
 export function candidateFitsProfile(candidate, profile) {

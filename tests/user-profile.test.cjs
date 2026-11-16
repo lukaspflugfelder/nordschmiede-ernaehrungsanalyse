@@ -3,19 +3,23 @@ const vm = require("node:vm");
 const assert = require("node:assert/strict");
 const { test, before } = require("node:test");
 
-let rules;
+let rules, ledgerRules, verifiedPlan;
 const routeSource = readFileSync("app/api/analyze/route.js", "utf8")
   .replace(/^import .*;\r?\n/gm, "").replace(/^export /gm, "");
 function loadRoute(fetchImpl) {
   const context = vm.createContext({
     process: { env: { OPENAI_API_KEY: "mock-key-not-real" } }, console,
-    profileRules: rules, structuredClone, Response, AbortController, setTimeout, clearTimeout,
+    profileRules: rules, ledgerRules, verifiedPlan, structuredClone, Response, AbortController, setTimeout, clearTimeout,
     fetch: fetchImpl || (() => { throw new Error("Unexpected network call"); })
   });
   vm.runInContext(routeSource, context);
   return context;
 }
-before(async () => { rules = await import("../app/api/analyze/user-profile.mjs"); });
+before(async () => {
+ rules = await import("../app/api/analyze/user-profile.mjs");
+ ledgerRules = await import("../app/api/analyze/nutrition-ledger.mjs");
+ verifiedPlan = await import("../app/api/analyze/verified-plan.mjs");
+});
 
 const form = {
   age: "70", height: "178", weight: "68", targetWeight: "70", gender: "m",
@@ -108,20 +112,6 @@ test("explicit constraints in other text fields are not lost", () => {
   assert.ok(profileFor({ dietType: "Keto", goal: "Muskelaufbau ohne Keto" }).errors.length);
 });
 
-test("catalog swaps remove the recorded source and recompute their actual nutrient difference", () => {
-  const { profile, targets } = profileFor({ goal: "Abnehmen", targetWeight: "65", dietType: "Mischkost", intolerances: "Milchallergie", cookingTime: "3 Minuten" });
-  const report = { ...targets, userProfile: profile, differenz: { kcal: 500, protein: -30, fett: 30, kohlenhydrate: 50 } };
-  const candidates = rules.buildProfileCandidateConfigs([{ tag: 1, snacks: "50 g Schokolade" }], report);
-  const tofu = candidates.find(candidate => candidate.targetFoodIds[0] === "tofu");
-  assert.ok(tofu);
-  assert.ok(Math.abs(tofu.weeklyEffect.kcal - (-49)) < 0.001);
-  assert.equal(tofu.weeklyEffect.protein, 20.5);
-  assert.match(tofu.action, /50 g Schokolade durch 150 g Verzehrfertiger Naturtofu/);
-  assert.ok(candidates.every(candidate => rules.candidateFitsProfile(candidate, profile)));
-  assert.ok(candidates.every(candidate => !candidate.targetFoodIds.includes("skyr")));
-  assert.equal(rules.buildProfileCandidateConfigs([{ tag: 1, snacks: "Schokolade ohne Mengenangabe" }], report).length, 0);
-});
-
 test("candidate validation rejects missing metadata, unknown foods and excessive preparation times", () => {
   const profile = profileFor({ cookingTime: "1 Minute" }).profile;
   assert.equal(rules.candidateFitsProfile({ action: "Iss Quark" }, profile), false);
@@ -130,36 +120,10 @@ test("candidate validation rejects missing metadata, unknown foods and excessive
   assert.equal(rules.candidateFitsProfile({ targetFoodIds: ["skyr"], prepMinutes: 1 }, profile), true);
 });
 
-test("repeated identical swaps form one weekly habit with a summed nutrient effect", () => {
-  const { profile, targets } = profileFor({ goal: "Abnehmen", targetWeight: "65", intolerances: "Milchallergie", cookingTime: "3 Minuten" });
-  const report = { ...targets, userProfile: profile, differenz: { kcal: 500, protein: -30, fett: 30, kohlenhydrate: 50 } };
-  const days = Array.from({ length: 7 }, (_, index) => ({ tag: index + 1, snacks: "50 g Schokolade" }));
-  const candidates = rules.buildProfileCandidateConfigs(days, report);
-  const tofu = candidates.filter(candidate => candidate.targetFoodIds[0] === "tofu");
-  assert.equal(tofu.length, 1);
-  assert.equal(tofu[0].days.length, 7);
-  assert.ok(Math.abs(tofu[0].weeklyEffect.kcal - (-343)) < 0.001);
-});
-
-test("the actual solver uses the profile pool and preserves the verified action text", () => {
-  const context = loadRoute();
-  const { profile, targets } = profileFor({ intolerances: "Milchallergie", cookingTime: "3 Minuten" });
-  const report = { ...targets, userProfile: profile, istZustand: { kcal: 2500, protein: 60, fett: 150, kohlenhydrate: 100 } };
-  report.differenz = context.calculateDifference(report.istZustand, targets.sollZustand);
-  const days = [{ tag: 1, breakfast: "", lunch: "", dinner: "", snacks: "50 g Schokolade", drinks: "" }];
-  const target = Object.fromEntries(Object.entries(report.differenz).map(([key, value]) => [key, -value]));
-  const pool = context.buildCumulativeCandidatesV38(days, report, target);
-  assert.ok(pool.length);
-  assert.ok(pool.every(candidate => rules.candidateFitsProfile(candidate, profile)));
-  const result = context.buildDeterministicTenStepPlan(report, days);
-  assert.ok(result.zehnSchrittePlan.length);
-  assert.match(result.zehnSchrittePlan[0], /Zubereitungszeit/);
-  assert.doesNotMatch(result.zehnSchrittePlan.join(" "), /Skyr|Magerquark|Frischkäse/);
-});
-
 test("model receives the shared profile; returned recommendation text is constrained before publication", async () => {
   let captured;
   const modelReport = {
+    ernaehrungsrealitaet: "Eine wiederkehrende Woche.",
     istZustand: { kcal: 2500, protein: 60, fett: 150, kohlenhydrate: 100 },
     problemMuster: [{ muster: "Snack", beobachtung: "Schokolade wurde protokolliert.", hebel: "Iss Skyr" }],
     lebensmittelAnalyse: [{ lebensmittel: "Schokolade", bewertung: "stabil", einordnung: "Iss mehr davon" }],
@@ -172,14 +136,15 @@ test("model receives the shared profile; returned recommendation text is constra
   });
   const response = await context.POST({ json: async () => ({
     form: { ...form, intolerances: "Milchallergie", cookingTime: "3 Minuten" },
-    days: [{ snacks: "50 g Schokolade" }], consent: { aiAccepted: true, privacyAccepted: true }
+    days: Array.from({ length: 7 }, () => ({ snacks: "50 g Schokolade" })), consent: { aiAccepted: true, privacyAccepted: true }
   }) });
   const body = await response.json();
   assert.equal(response.status, 200, JSON.stringify(body));
   const payload = JSON.parse(captured.input[1].content);
   assert.deepEqual(payload.nutzerprofil.allergens, ["milk"]);
   assert.equal(payload.nutzerprofil.maxPrepMinutes, 3);
-  assert.ok(!captured.text.format.schema.properties.stabileBausteine.items.properties.lebensmittel.enum.includes("Skyr natur"));
+  assert.equal(captured.text.format.strict, true);
+  assert.equal(captured.text.format.schema.properties.istZustand, undefined);
   assert.equal(body.report.stabileBausteine.length, 0);
   assert.doesNotMatch(body.report.problemMuster[0].hebel, /Skyr/);
   assert.doesNotMatch(body.report.lebensmittelAnalyse[0].einordnung, /Iss mehr/);
@@ -191,7 +156,7 @@ test("unrecognized restrictions stop before any model request", async () => {
   let calls = 0;
   const context = loadRoute(async () => { calls += 1; throw new Error("Must not call model"); });
   const response = await context.POST({ json: async () => ({
-    form: { ...form, intolerances: "Histaminintoleranz" }, days: [{ snacks: "50 g Schokolade" }],
+    form: { ...form, intolerances: "Histaminintoleranz" }, days: Array.from({ length: 7 }, () => ({ snacks: "50 g Schokolade" })),
     consent: { aiAccepted: true, privacyAccepted: true }
   }) });
   assert.equal(response.status, 400);

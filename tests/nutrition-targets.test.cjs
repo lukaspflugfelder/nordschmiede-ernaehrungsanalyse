@@ -9,7 +9,9 @@ let context;
 let calculate;
 before(async () => {
   const profileRules = await import("../app/api/analyze/user-profile.mjs");
-  context = vm.createContext({ process, console, profileRules, structuredClone });
+  const ledgerRules = await import("../app/api/analyze/nutrition-ledger.mjs");
+  const verifiedPlan = await import("../app/api/analyze/verified-plan.mjs");
+  context = vm.createContext({ process, console, profileRules, ledgerRules, verifiedPlan, structuredClone });
   vm.runInContext(source.replace(/^import .*;\r?\n/gm, "").replace(/^export /gm, ""), context);
   calculate = context.calculateNutritionTargets;
 });
